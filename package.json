@@ -12,5 +12,11 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "caniuse-lite": "^1.0.30001803"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
   }
 }

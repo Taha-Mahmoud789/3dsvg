@@ -107,9 +107,10 @@ export default function Home() {
     export3DFnRef.current?.(format, base);
   }, [inputTab, currentText]);
 
-  // --- Drag-and-drop SVG ---
+  // --- Drag-and-drop SVG + raster ---
   const [isDragging, setIsDragging] = useState(false);
   const [droppedFile, setDroppedFile] = useState<{ name: string; content: string } | null>(null);
+  const [droppedRasterFile, setDroppedRasterFile] = useState<File | null>(null);
   const dragCounterRef = useRef(0);
 
   useEffect(() => {
@@ -133,7 +134,19 @@ export default function Home() {
       dragCounterRef.current = 0;
       setIsDragging(false);
       const file = e.dataTransfer?.files[0];
-      if (file && (file.type === "image/svg+xml" || file.name.endsWith(".svg"))) {
+      if (!file) return;
+
+      // Check for raster image
+      const rasterExts = /\.(png|jpe?g|gif|webp|bmp|ico)$/i;
+      const rasterMimes = /^image\/(png|jpe?g|gif|webp|bmp|x-icon)$/;
+      if (rasterMimes.test(file.type) || rasterExts.test(file.name)) {
+        setDroppedRasterFile(file);
+        setInputTab("file");
+        return;
+      }
+
+      // SVG file
+      if (file.type === "image/svg+xml" || file.name.endsWith(".svg")) {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const text = ev.target?.result as string;
@@ -257,6 +270,8 @@ export default function Home() {
             initialText={currentText}
             initialFont={currentFont}
             droppedFile={droppedFile}
+            droppedRasterFile={droppedRasterFile}
+            onRasterFileChange={(f) => setDroppedRasterFile(f)}
           />
         </motion.div>
 
@@ -384,7 +399,7 @@ export default function Home() {
             <svg className="h-16 w-16 text-white/50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
             </svg>
-            <span className="text-xl font-medium text-white/60">Drop SVG file</span>
+            <span className="text-xl font-medium text-white/60">Drop SVG or image file</span>
           </div>
         </motion.div>
       )}
