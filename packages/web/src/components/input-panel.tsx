@@ -328,7 +328,8 @@ export function InputPanel({
                 <PngToSvgPanel
                   file={rasterFile}
                   imageUrl={rasterImageUrl}
-                  onConfirm={() => {
+                  onConfirm={(svg: string) => {
+                    onFileSvgChange(svg);
                     setRasterFile(null);
                     setRasterImageUrl(null);
                   }}

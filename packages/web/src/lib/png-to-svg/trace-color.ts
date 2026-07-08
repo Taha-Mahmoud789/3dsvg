@@ -1,6 +1,5 @@
 import sharp from "sharp";
 import potrace from "potrace";
-import { buildPaletteSync } from "image-q";
 import { optimizeSvg, calculateSvgSize } from "./optimize";
 
 export interface TraceColorOptions {
@@ -77,13 +76,24 @@ export async function traceColor(
   const imageQ = require("image-q");
   const PointContainer = imageQ.utils.PointContainer;
 
+  const rgbaBuffer = Buffer.alloc(width * height * 4);
+  const srcPixels = preprocessedBuffer;
+  for (let i = 0; i < width * height; i++) {
+    const srcOff = i * channels;
+    const dstOff = i * 4;
+    rgbaBuffer[dstOff] = srcPixels[srcOff];
+    rgbaBuffer[dstOff + 1] = srcPixels[srcOff + 1];
+    rgbaBuffer[dstOff + 2] = srcPixels[srcOff + 2];
+    rgbaBuffer[dstOff + 3] = 255;
+  }
+
   const pointArray = PointContainer.fromUint8Array(
-    new Uint8ClampedArray(preprocessedBuffer),
+    new Uint8ClampedArray(rgbaBuffer),
     width,
     height,
   );
 
-  const palette = buildPaletteSync([pointArray], {
+  const palette = imageQ.buildPaletteSync([pointArray], {
     colors: options.colorCount,
     paletteQuantization: "wuquant",
     colorDistanceFormula: "euclidean-bt709",
@@ -94,17 +104,24 @@ export async function traceColor(
     (p: { r: number; g: number; b: number }) => rgbToHex(p.r, p.g, p.b),
   );
 
+  if (hexPalette.length === 0) {
+    const emptySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="white"/></svg>`;
+    return { svg: emptySvg, sizeBytes: Buffer.byteLength(emptySvg, "utf-8") };
+  }
+
   const alphaMax = smoothingToAlphaMax(options.smoothing);
   const potraceOpts = {
     turdSize: options.speckleSize,
     alphaMax,
     optCurve: true,
     optTolerance: 0.2,
+    threshold: 128,
+    blackOnWhite: true,
     turnPolicy: "majority" as const,
   };
 
-  const srcPixels = new Uint8ClampedArray(preprocessedBuffer);
-  const stride = channels;
+  const maxDist = 255 * Math.sqrt(3);
+  const relativeThreshold = 0.12;
 
   const layerFragments: { svg: string; area: number }[] = [];
 
@@ -113,12 +130,12 @@ export async function traceColor(
     const maskBuffer = Buffer.alloc(width * height);
 
     for (let i = 0; i < width * height; i++) {
-      const offset = i * stride;
+      const offset = i * channels;
       const r = srcPixels[offset];
       const g = srcPixels[offset + 1];
       const b = srcPixels[offset + 2];
       const dist = euclideanDist(r, g, b, tr, tg, tb);
-      maskBuffer[i] = dist < 30 ? 0 : 255;
+      maskBuffer[i] = dist < maxDist * relativeThreshold ? 0 : 255;
     }
 
     let pixelCount = 0;
@@ -150,7 +167,7 @@ export async function traceColor(
 
   layerFragments.sort((a, b) => b.area - a.area);
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${layerFragments.map((l) => l.svg).join("")}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">${layerFragments.map((l) => l.svg).join("")}</svg>`;
   const optimized = optimizeSvg(svg);
   const sizeBytes = calculateSvgSize(optimized);
 

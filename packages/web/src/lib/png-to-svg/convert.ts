@@ -6,19 +6,20 @@ import type { ConvertSettings, ConvertResult } from "./types";
 
 export type { ConvertSettings, ConvertResult };
 
-function wrapSvg(innerSvg: string, width: number, height: number): string {
-  const paths = innerSvg.match(/<path\b[^>]*>/gi) || [];
-  const coloredPaths = paths.map((p) => {
-    if (/fill\s*=/.test(p)) return p;
-    return p.replace(/<path\b/, '<path fill="black"');
+function ensureFillOnPaths(svg: string): string {
+  const pathRegex = /<path\b([^>]*?)(\/?)>/gi;
+  return svg.replace(pathRegex, (match, attrs, selfClose) => {
+    if (/\bfill\s*=/.test(attrs)) return match;
+    return `<path${attrs} fill="black"${selfClose}>`;
   });
+}
 
-  let result = innerSvg;
-  for (let i = 0; i < paths.length; i++) {
-    result = result.replace(paths[i], coloredPaths[i]);
-  }
+function wrapWithBackground(innerSvg: string, width: number, height: number): string {
+  const body = innerSvg
+    .replace(/<svg[^>]*>/, "")
+    .replace(/<\/svg>$/, "");
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="white"/>${result.replace(/<svg[^>]*>/, "").replace(/<\/svg>$/, "")}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="white"/>${body}</svg>`;
 }
 
 export async function convertPngToSvg(
@@ -66,7 +67,8 @@ export async function convertPngToSvg(
     }
   }
 
-  const finalSvg = wrapSvg(rawResult.svg, width, height);
+  const withFill = ensureFillOnPaths(rawResult.svg);
+  const finalSvg = wrapWithBackground(withFill, width, height);
   const sizeBytes = Buffer.byteLength(finalSvg, "utf-8");
 
   return { svg: finalSvg, sizeBytes };

@@ -32,18 +32,19 @@ export async function traceBw(
   channels: number,
   options: TraceBwOptions,
 ): Promise<TraceBwResult> {
-  const thresholdBuffer = await sharp(preprocessedBuffer, {
+  const imageBuffer = await sharp(preprocessedBuffer, {
     raw: { width, height, channels: channels as 1 | 2 | 3 | 4 },
   })
-    .threshold(128)
     .png()
     .toBuffer();
 
-  const svg = await traceAsync(thresholdBuffer, {
+  const svg = await traceAsync(imageBuffer, {
     turdSize: options.speckleSize,
     alphaMax: smoothingToAlphaMax(options.smoothing),
     optCurve: true,
     optTolerance: 0.2,
+    threshold: 128,
+    blackOnWhite: true,
     turnPolicy: "majority",
   });
 

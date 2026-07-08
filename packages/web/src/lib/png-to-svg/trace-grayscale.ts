@@ -64,6 +64,8 @@ export async function traceGrayscale(
     alphaMax,
     optCurve: true,
     optTolerance: 0.2,
+    threshold: 128,
+    blackOnWhite: true,
     turnPolicy: "majority" as const,
   };
 
@@ -88,10 +90,14 @@ export async function traceGrayscale(
     if (paths.length === 0) continue;
 
     const fillColor = grayHex(i, graySteps);
-    layerFragments.push(`<g fill="${fillColor}">${paths.join("")}</g>`);
+    const coloredPaths = paths.map((p) => {
+      const stripped = p.replace(/\s+fill="[^"]*"/gi, "");
+      return stripped.replace(/<path\b/, `<path fill="${fillColor}"`);
+    });
+    layerFragments.push(coloredPaths.join(""));
   }
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${layerFragments.join("")}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">${layerFragments.join("")}</svg>`;
   const optimized = optimizeSvg(svg);
   const sizeBytes = calculateSvgSize(optimized);
 
