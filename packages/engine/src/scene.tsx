@@ -133,6 +133,59 @@ function parseShapesFromSVG(svgString: string): THREE.Shape[] {
   const vbW = vbMatch ? parseFloat(vbMatch[3]) : null;
   const vbH = vbMatch ? parseFloat(vbMatch[4]) : null;
 
+  // Extract clipPath definitions — SVGLoader ignores them but they contain the real shapes
+  const clipPathDefs = new Map<string, string>();
+  const clipPathRegex = /<clipPath\s+id="([^"]+)"[^>]*>([\s\S]*?)<\/clipPath>/gi;
+  let cpm: RegExpExecArray | null;
+  while ((cpm = clipPathRegex.exec(svgString)) !== null) {
+    const id = cpm[1];
+    const inner = cpm[2];
+    const pathMatch = inner.match(/d="([^"]+)"/);
+    if (pathMatch) clipPathDefs.set(id, pathMatch[1]);
+  }
+
+  // Parse clip-path references from g elements and extract their transforms
+  const usedClipPaths = new Set<string>();
+  const clipShapeRegex = /<g[^>]*clip-path="url\(#([^"]+)\)"[^>]*>/gi;
+  let csm: RegExpExecArray | null;
+  while ((csm = clipShapeRegex.exec(svgString)) !== null) {
+    const clipId = csm[1];
+    if (!clipPathDefs.has(clipId)) continue;
+    const d = clipPathDefs.get(clipId)!;
+
+    // Extract transform from enclosing g elements (look backwards from clip-path)
+    const beforeClip = svgString.substring(0, csm.index);
+    const transformMatch = beforeClip.match(/transform="matrix\(([^)]+)\)"\s*[^>]*>\s*<g[^>]*>\s*<g[^>]*clip-path="url\(#/) ||
+      beforeClip.match(/<g[^>]*transform="matrix\(([^)]+)\)"[^>]*>\s*(?:<g[^>]*>\s*)*<g[^>]*clip-path="url\(#/);
+    let tx = 0, ty = 0;
+    if (transformMatch) {
+      const nums = transformMatch[1].split(/[\s,]+/).map(Number);
+      if (nums.length >= 6) { tx = nums[4]; ty = nums[5]; }
+    }
+
+    // Parse the clip path data into a Three.js Shape
+    try {
+      const tempPath = new THREE.Path();
+      // Use SVGLoader to parse the d attribute
+      const tempSvg = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${d}"/></svg>`;
+      const tempData = loader.parse(tempSvg);
+      if (tempData.paths.length > 0) {
+        const shapes = SVGLoader.createShapes(tempData.paths[0]);
+        for (const shape of shapes) {
+          // Apply transform if present
+          if (tx !== 0 || ty !== 0) {
+            shape.translate(tx, ty);
+          }
+          if (vbW && vbH && isViewBoxRect(shape, vbW, vbH)) continue;
+          allShapes.push(shape);
+          usedClipPaths.add(clipId);
+        }
+      }
+    } catch {
+      // Skip unparseable clip paths
+    }
+  }
+
   svgData.paths.forEach((path) => {
     const style = path.userData?.style;
     const hasFill = style?.fill && style.fill !== "none" && style.fill !== "transparent";
