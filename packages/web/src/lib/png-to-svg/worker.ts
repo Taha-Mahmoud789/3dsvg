@@ -8,6 +8,8 @@ import { traceSmooth, detectGradients, type TraceOptions } from "./trace-smooth"
 import { tracePixelGrid, type PixelGridOptions } from "./trace-pixel-grid";
 import { optimizeSvg, calculateSvgSize } from "./optimize-svg";
 
+const MAX_TRACE_DIM = 800;
+
 export interface WorkerRequest {
   imageData: ImageData;
   mode: "smooth" | "pixel";
@@ -34,18 +36,37 @@ export interface WorkerResponse {
   progress?: number;
 }
 
-/**
- * Validate SVG by rendering it to an offscreen canvas.
- * Returns true if the SVG renders without errors.
- */
+function downsampleImageData(src: ImageData, maxDim: number): { data: ImageData; scale: number } {
+  const { width: w, height: h, data } = src;
+  if (w <= maxDim && h <= maxDim) return { data: src, scale: 1 };
+
+  const scale = maxDim / Math.max(w, h);
+  const tw = Math.round(w * scale);
+  const th = Math.round(h * scale);
+
+  // Ponytail: nearest-neighbor downsample, no canvas needed
+  const out = new Uint8ClampedArray(tw * th * 4);
+  for (let oy = 0; oy < th; oy++) {
+    for (let ox = 0; ox < tw; ox++) {
+      const sx = Math.floor(ox / scale);
+      const sy = Math.floor(oy / scale);
+      const si = (sy * w + sx) * 4;
+      const di = (oy * tw + ox) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
+    }
+  }
+
+  return { data: new ImageData(out, tw, th), scale };
+}
+
 function validateSvg(svg: string): boolean {
   try {
     const img = new Image();
     const blob = new Blob([svg], { type: "image/svg+xml" });
     const url = URL.createObjectURL(blob);
-
-    // Synchronous check: can we at least create a valid blob URL?
-    // Full render validation happens in the main thread via the panel.
     URL.revokeObjectURL(url);
     return svg.includes("<svg") && svg.includes("</svg>");
   } catch {
@@ -56,9 +77,12 @@ function validateSvg(svg: string): boolean {
 self.onmessage = function (e: MessageEvent<WorkerRequest>) {
   const { imageData, mode, options } = e.data;
 
-  const originalSizeBytes = (imageData.data.length / 4) * 3; // rough RGBA→RGB estimate
+  const originalSizeBytes = (imageData.data.length / 4) * 3;
 
   try {
+    // Downsample large images to prevent OOM
+    const { data: workData, scale } = downsampleImageData(imageData, MAX_TRACE_DIM);
+
     // Step 1: Quantize
     const quantizeOpts: QuantizeOptions = {
       colorCount: options.colorCount,
@@ -68,7 +92,7 @@ self.onmessage = function (e: MessageEvent<WorkerRequest>) {
       bwThreshold: options.bwThreshold,
     };
 
-    const { palette, indexed, width, height } = quantize(imageData, quantizeOpts);
+    const { palette, indexed, width, height } = quantize(workData, quantizeOpts);
 
     // Step 2: Trace
     let paths: string;
@@ -85,8 +109,7 @@ self.onmessage = function (e: MessageEvent<WorkerRequest>) {
         fullColor: options.fullColor,
       };
 
-      // Detect gradients before tracing (smooth mode only)
-      const gradientInfo = detectGradients(imageData, indexed, palette, width, height);
+      const gradientInfo = detectGradients(workData, indexed, palette, width, height);
       gradientDefs = gradientInfo.defs;
 
       paths = traceSmooth(indexed, palette, width, height, { ...traceOpts, gradientMeta: gradientInfo.meta });
@@ -98,8 +121,10 @@ self.onmessage = function (e: MessageEvent<WorkerRequest>) {
       paths = tracePixelGrid(indexed, palette, width, height, pixelOpts);
     }
 
-    // Step 3: Build SVG with correct viewBox preserving aspect ratio
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${gradientDefs}${paths}</svg>`;
+    // Step 3: SVG — use downsampled dimensions for coordinates, original for display size
+    const origW = imageData.width;
+    const origH = imageData.height;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${origW}" height="${origH}">${gradientDefs}${paths}</svg>`;
 
     // Step 4: Optimize
     const optimized = optimizeSvg(svg);
@@ -108,15 +133,13 @@ self.onmessage = function (e: MessageEvent<WorkerRequest>) {
     // Step 5: Basic validation
     const isValid = validateSvg(optimized);
 
-    const response: WorkerResponse = {
+    self.postMessage({
       svg: optimized,
       sizeBytes,
       originalSizeBytes,
       mode,
       isValid,
-    };
-
-    self.postMessage(response);
+    } satisfies WorkerResponse);
   } catch (err) {
     self.postMessage({
       svg: "",

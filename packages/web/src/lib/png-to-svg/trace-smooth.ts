@@ -58,7 +58,8 @@ function traceContour(
         visited[cy * w + cx] = 1;
         contour.push({ x: cx, y: cy });
 
-        // Moore neighborhood tracing
+        // Moore neighborhood tracing — skip visited pixels to prevent cycles,
+        // but allow return to start point to close the contour
         const dirs = [
           [1, 0],
           [1, 1],
@@ -74,7 +75,7 @@ function traceContour(
           const idx = (prevDir + 6 + d) % 8;
           const nx = cx + dirs[idx][0];
           const ny = cy + dirs[idx][1];
-          if (isColor(nx, ny)) {
+          if (isColor(nx, ny) && (nx === x && ny === y || !visited[ny * w + nx])) {
             cx = nx;
             cy = ny;
             prevDir = (idx + 4) % 8;
@@ -83,7 +84,7 @@ function traceContour(
           }
         }
         if (!found) break;
-      } while (cx !== x || cy !== y || contour.length < 3);
+      } while (cx !== x || cy !== y);
 
       if (contour.length >= 3) edges.push(contour);
     }
@@ -98,26 +99,41 @@ function simplifyPath(
 ): { x: number; y: number }[] {
   if (points.length <= 2) return points;
 
-  let maxDist = 0;
-  let maxIdx = 0;
-  const first = points[0];
-  const last = points[points.length - 1];
+  // Iterative Douglas-Peucker to avoid stack overflow on large contours
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
 
-  for (let i = 1; i < points.length - 1; i++) {
-    const d = pointLineDistance(points[i], first, last);
-    if (d > maxDist) {
-      maxDist = d;
-      maxIdx = i;
+  const stack: [number, number][] = [[0, points.length - 1]];
+  while (stack.length > 0) {
+    const [start, end] = stack.pop()!;
+    if (end - start < 2) continue;
+
+    let maxDist = 0;
+    let maxIdx = start;
+    const a = points[start];
+    const b = points[end];
+
+    for (let i = start + 1; i < end; i++) {
+      const d = pointLineDistance(points[i], a, b);
+      if (d > maxDist) {
+        maxDist = d;
+        maxIdx = i;
+      }
+    }
+
+    if (maxDist > tolerance) {
+      keep[maxIdx] = 1;
+      stack.push([start, maxIdx]);
+      stack.push([maxIdx, end]);
     }
   }
 
-  if (maxDist > tolerance) {
-    const left = simplifyPath(points.slice(0, maxIdx + 1), tolerance);
-    const right = simplifyPath(points.slice(maxIdx), tolerance);
-    return [...left.slice(0, -1), ...right];
+  const result: { x: number; y: number }[] = [];
+  for (let i = 0; i < points.length; i++) {
+    if (keep[i]) result.push(points[i]);
   }
-
-  return [first, last];
+  return result;
 }
 
 function pointLineDistance(
@@ -206,7 +222,7 @@ function expandContour(
 function detectStroke(
   contour: { x: number; y: number }[]
 ): { cx: number; cy: number; x1: number; y1: number; x2: number; y2: number; width: number } | null {
-  if (contour.length < 4) return null;
+  if (contour.length < 4 || contour.length > 500) return null;
 
   // Compute bounding box
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -219,6 +235,8 @@ function detectStroke(
 
   const bboxW = maxX - minX;
   const bboxH = maxY - minY;
+  // Skip large bounding boxes — too expensive for fill-count and O(n²) farthest-point
+  if (bboxW > 200 || bboxH > 200) return null;
   const avgDim = (bboxW + bboxH) / 2;
   const ratio = Math.max(bboxW, bboxH) / (Math.min(bboxW, bboxH) || 1);
 
@@ -535,21 +553,25 @@ export function detectShapeFromPixels(
   colorIdx: number,
   tolerance: number
 ): string | null {
-  // Collect all pixel positions for this color
-  const points: { x: number; y: number }[] = [];
+  const totalPixels = width * height;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let count = 0;
+
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (indexed[y * width + x] === colorIdx) points.push({ x, y });
+      if (indexed[y * width + x] === colorIdx) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        count++;
+      }
     }
   }
-  if (points.length < 10) return null;
+  if (count < 10) return null;
 
-  // Bounding box
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
-    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-  }
+  // Skip shape detection for dominant colors (>50% of image) — too expensive and unlikely to be a simple shape
+  if (count > totalPixels * 0.5) return null;
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   const bboxW = maxX - minX + 1;
@@ -559,15 +581,18 @@ export function detectShapeFromPixels(
   // Check circle: for a filled circle, most pixels should be within the bounding circle
   if (Math.abs(bboxW - bboxH) < avgR * 0.2) {
     const circleArea = Math.PI * avgR * avgR;
-    const fillRatio = points.length / circleArea;
+    const fillRatio = count / circleArea;
     if (fillRatio > 0.7 && fillRatio < 1.3) {
-      // Verify: most pixels should be within the bounding circle
+      // Verify: count pixels inside the bounding circle
       let insideCircle = 0;
-      for (const p of points) {
-        const dist = Math.hypot(p.x - cx, p.y - cy);
-        if (dist <= avgR + 1) insideCircle++;
+      for (let y = Math.floor(minY); y <= Math.ceil(maxY); y++) {
+        for (let x = Math.floor(minX); x <= Math.ceil(maxX); x++) {
+          if (indexed[y * width + x] !== colorIdx) continue;
+          const dist = Math.hypot(x - cx, y - cy);
+          if (dist <= avgR + 1) insideCircle++;
+        }
       }
-      if (insideCircle / points.length > 0.95) {
+      if (insideCircle / count > 0.95) {
         return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${avgR.toFixed(1)}"/>`;
       }
     }
@@ -575,12 +600,8 @@ export function detectShapeFromPixels(
 
   // Check rectangle: pixels should fill the bounding box
   const bboxArea = bboxW * bboxH;
-  if (points.length / bboxArea > 0.75 && bboxW > 2 && bboxH > 2) {
-    // Additional check: most pixels should be near edges (hollow-ish) or fill (solid)
-    // For solid rects, points/bbox ratio is high
-    if (points.length / bboxArea > 0.85) {
-      return `<rect x="${minX.toFixed(1)}" y="${minY.toFixed(1)}" width="${bboxW.toFixed(1)}" height="${bboxH.toFixed(1)}"/>`;
-    }
+  if (count / bboxArea > 0.85 && bboxW > 2 && bboxH > 2) {
+    return `<rect x="${minX.toFixed(1)}" y="${minY.toFixed(1)}" width="${bboxW.toFixed(1)}" height="${bboxH.toFixed(1)}"/>`;
   }
 
   return null;
