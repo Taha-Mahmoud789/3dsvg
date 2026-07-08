@@ -11,6 +11,7 @@ export interface TraceOptions {
   bwThreshold: number;
   lockedColors: string[];
   fullColor: boolean;
+  gradientMeta?: GradientMeta[];
 }
 
 interface ContourPoint {
@@ -275,6 +276,27 @@ function detectStroke(
   };
 }
 
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = hex.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (!m) return null;
+  return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+}
+
+function isColorInGradientRange(
+  r: number, g: number, b: number,
+  start: [number, number, number],
+  end: [number, number, number]
+): boolean {
+  // Check if color is roughly between start and end (within ±25 per channel)
+  for (let ch = 0; ch < 3; ch++) {
+    const lo = Math.min(start[ch], end[ch]) - 25;
+    const hi = Math.max(start[ch], end[ch]) + 25;
+    const val = [r, g, b][ch];
+    if (val < lo || val > hi) return false;
+  }
+  return true;
+}
+
 export function traceSmooth(
   indexed: Uint8Array,
   palette: [number, number, number, number][],
@@ -282,9 +304,28 @@ export function traceSmooth(
   height: number,
   options: TraceOptions
 ): string {
-  const { smoothing, speckleSize } = options;
+  const { smoothing, speckleSize, gradientMeta } = options;
   const tolerance = (1 - smoothing / 100) * 3;
   const SEAM_BLEED = 0.5; // ponytail: fixed 0.5px bleed, tune if seams still visible
+
+  // Build a lookup: hex → gradient id (for colors within gradient range)
+  const hexToGradient = new Map<string, string>();
+  if (gradientMeta) {
+    for (const g of gradientMeta) {
+      const startRgb = hexToRgb(g.startColor);
+      const endRgb = hexToRgb(g.endColor);
+      if (!startRgb || !endRgb) continue;
+      // Map every palette color that falls between start and end to this gradient
+      for (const [r, g2, b, a] of palette) {
+        if (a < 128) continue;
+        const hex = rgbToHex(r, g2, b);
+        if (hexToGradient.has(hex)) continue;
+        if (isColorInGradientRange(r, g2, b, startRgb, endRgb)) {
+          hexToGradient.set(hex, g.id);
+        }
+      }
+    }
+  }
 
   const groups: string[] = []; // grouped by color
 
@@ -299,40 +340,39 @@ export function traceSmooth(
 
     const hex = `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
     const opacity = a < 255 ? ` opacity="${(a / 255).toFixed(2)}"` : "";
+    const gradId = hexToGradient.get(hex);
+    const fill = gradId ? `fill="url(#${gradId})"` : `fill="${hex}"`;
     const groupParts: string[] = [];
 
-    // For each contour, decide: geometric primitive, stroke, or filled path
-    for (let i = 0; i < validContours.length; i++) {
-      const contour = validContours[i];
+    // Try pixel-based shape detection first (more reliable than contour-based)
+    const pixelShape = detectShapeFromPixels(indexed, width, height, ci, tolerance + 1);
+    if (pixelShape) {
+      groupParts.push(pixelShape.replace("/>", ` ${fill}${opacity}/>`));
+    } else {
+      // Fallback: individual contour paths
+      for (let i = 0; i < validContours.length; i++) {
+        const contour = validContours[i];
 
-      // Check if this single contour is a geometric primitive (circle/ellipse)
-      const geoShape = detectGeometricShapes([contour], tolerance);
-      if (geoShape.length > 0) {
-        groupParts.push(geoShape[0].replace("/>", ` fill="${hex}"${opacity}/>`));
-        continue;
-      }
+        const stroke = detectStroke(contour);
+        if (stroke) {
+          const strokeAttr = gradId ? `stroke="url(#${gradId})"` : `stroke="${hex}"`;
+          groupParts.push(
+            `<line x1="${stroke.x1.toFixed(1)}" y1="${stroke.y1.toFixed(1)}" x2="${stroke.x2.toFixed(1)}" y2="${stroke.y2.toFixed(1)}" ${strokeAttr} stroke-width="${stroke.width}" stroke-linecap="round"${opacity}/>`
+          );
+          continue;
+        }
 
-      // Check if this is a stroke-based line
-      const stroke = detectStroke(contour);
-      if (stroke) {
+        const bleedContour = expandContour(contour, SEAM_BLEED);
+        const pathData = contoursToPath([bleedContour], tolerance);
+        if (pathData.length === 0) continue;
+
         groupParts.push(
-          `<line x1="${stroke.x1.toFixed(1)}" y1="${stroke.y1.toFixed(1)}" x2="${stroke.x2.toFixed(1)}" y2="${stroke.y2.toFixed(1)}" stroke="${hex}" stroke-width="${stroke.width}" stroke-linecap="round"${opacity}/>`
+          `<path d="${pathData[0]}" ${fill}${opacity} fill-rule="evenodd"/>`
         );
-        continue;
       }
-
-      // Default: filled path with seam bleed
-      const bleedContour = expandContour(contour, SEAM_BLEED);
-      const pathData = contoursToPath([bleedContour], tolerance);
-      if (pathData.length === 0) continue;
-
-      groupParts.push(
-        `<path d="${pathData[0]}" fill="${hex}"${opacity} fill-rule="evenodd"/>`
-      );
     }
 
     if (groupParts.length > 0) {
-      // Group by color index for logical organization
       groups.push(`<g data-color="${ci}">${groupParts.join("")}</g>`);
     }
   }
@@ -340,115 +380,210 @@ export function traceSmooth(
   return groups.join("\n");
 }
 
+export interface GradientMeta {
+  id: string;
+  direction: "h" | "v";
+  minPos: number;
+  maxPos: number;
+  startColor: string;
+  endColor: string;
+}
+
+export interface GradientInfo {
+  defs: string;
+  meta: GradientMeta[];
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
 /**
- * Detect smooth color gradients in the image and output SVG gradient defs.
- * Scans rows and columns for monotonic color transitions.
+ * Detect smooth color gradients in the image and output SVG gradient defs
+ * plus metadata so traceSmooth can link path fills to gradients.
  */
 export function detectGradients(
   imageData: ImageData,
-  indexed: Uint8Array,
-  palette: [number, number, number, number][],
+  _indexed: Uint8Array,
+  _palette: [number, number, number, number][],
   width: number,
   height: number
-): string {
+): GradientInfo {
   const { data } = imageData;
   const defs: string[] = [];
+  const meta: GradientMeta[] = [];
 
-  // Check for horizontal gradients: scan a few rows, look for smooth monotonic transitions
+  const checkGradient = (
+    colors: [number, number, number][],
+    direction: "h" | "v",
+    pos: number
+  ) => {
+    if (colors.length < 4) return;
+
+    let isGradient = true;
+    let channelsChecked = 0;
+    for (let ch = 0; ch < 3; ch++) {
+      let increasing = 0;
+      let decreasing = 0;
+      let hasVariation = false;
+      for (let i = 1; i < colors.length; i++) {
+        const diff = colors[i][ch] - colors[i - 1][ch];
+        if (diff > 2) increasing++;
+        else if (diff < -2) { decreasing++; hasVariation = true; }
+        if (diff > 2) hasVariation = true;
+      }
+      // Only check channels that actually vary (skip constant channels like green=0)
+      if (!hasVariation) continue;
+      channelsChecked++;
+      if (increasing < colors.length * 0.6 && decreasing < colors.length * 0.6) {
+        isGradient = false;
+        break;
+      }
+    }
+    // Need at least 1 varying channel that shows monotonic trend
+    if (channelsChecked === 0) isGradient = false;
+
+    if (isGradient) {
+      const startColor = colors[0];
+      const endColor = colors[colors.length - 1];
+      const id = `grad-${direction}-${pos}`;
+      const startHex = rgbToHex(startColor[0], startColor[1], startColor[2]);
+      const endHex = rgbToHex(endColor[0], endColor[1], endColor[2]);
+
+      const axis = direction === "h" ? "x" : "y";
+      const attrs = direction === "h"
+        ? `x1="0%" y1="0%" x2="100%" y2="0%"`
+        : `x1="0%" y1="0%" x2="0%" y2="100%"`;
+
+      defs.push(
+        `<linearGradient id="${id}" ${attrs}>` +
+        `<stop offset="0%" stop-color="${startHex}"/>` +
+        `<stop offset="100%" stop-color="${endHex}"/>` +
+        `</linearGradient>`
+      );
+      meta.push({ id, direction, minPos: 0, maxPos: direction === "h" ? height : width, startColor: startHex, endColor: endHex });
+    }
+  };
+
+  // Horizontal gradients (scan rows)
   const sampleRows = [Math.floor(height * 0.25), Math.floor(height * 0.5), Math.floor(height * 0.75)];
-
   for (const row of sampleRows) {
     if (row >= height) continue;
-
-    // Sample colors across this row
     const colors: [number, number, number][] = [];
     const step = Math.max(1, Math.floor(width / 20));
     for (let x = 0; x < width; x += step) {
       const idx = (row * width + x) * 4;
       colors.push([data[idx], data[idx + 1], data[idx + 2]]);
     }
-
-    // Check if colors form a smooth gradient (monotonic in at least 2 channels)
-    if (colors.length < 4) continue;
-
-    let isGradient = true;
-    for (let ch = 0; ch < 3; ch++) {
-      let increasing = 0;
-      let decreasing = 0;
-      for (let i = 1; i < colors.length; i++) {
-        const diff = colors[i][ch] - colors[i - 1][ch];
-        if (diff > 2) increasing++;
-        else if (diff < -2) decreasing++;
-      }
-      // If one direction dominates, it's a gradient in this channel
-      if (increasing < colors.length * 0.6 && decreasing < colors.length * 0.6) {
-        isGradient = false;
-        break;
-      }
-    }
-
-    if (isGradient) {
-      // Get start and end colors
-      const startColor = colors[0];
-      const endColor = colors[colors.length - 1];
-      const startHex = `#${((1 << 24) + (startColor[0] << 16) + (startColor[1] << 8) + startColor[2]).toString(16).slice(1)}`;
-      const endHex = `#${((1 << 24) + (endColor[0] << 16) + (endColor[1] << 8) + endColor[2]).toString(16).slice(1)}`;
-
-      defs.push(
-        `<linearGradient id="grad-h-${row}" x1="0%" y1="0%" x2="100%" y2="0%">` +
-        `<stop offset="0%" stop-color="${startHex}"/>` +
-        `<stop offset="100%" stop-color="${endHex}"/>` +
-        `</linearGradient>`
-      );
-    }
+    checkGradient(colors, "h", row);
   }
 
-  // Check for vertical gradients: scan a few columns
+  // Vertical gradients (scan columns)
   const sampleCols = [Math.floor(width * 0.25), Math.floor(width * 0.5), Math.floor(width * 0.75)];
-
   for (const col of sampleCols) {
     if (col >= width) continue;
-
     const colors: [number, number, number][] = [];
     const step = Math.max(1, Math.floor(height / 20));
     for (let y = 0; y < height; y += step) {
       const idx = (y * width + col) * 4;
       colors.push([data[idx], data[idx + 1], data[idx + 2]]);
     }
+    checkGradient(colors, "v", col);
+  }
 
-    if (colors.length < 4) continue;
+  return {
+    defs: defs.length > 0 ? `<defs>${defs.join("")}</defs>` : "",
+    meta,
+  };
+}
 
-    let isGradient = true;
-    for (let ch = 0; ch < 3; ch++) {
-      let increasing = 0;
-      let decreasing = 0;
-      for (let i = 1; i < colors.length; i++) {
-        const diff = colors[i][ch] - colors[i - 1][ch];
-        if (diff > 2) increasing++;
-        else if (diff < -2) decreasing++;
-      }
-      if (increasing < colors.length * 0.6 && decreasing < colors.length * 0.6) {
-        isGradient = false;
-        break;
-      }
+/**
+ * Smooth a contour by averaging each point with its neighbors.
+ * Reduces staircase artifacts from pixel-grid tracing.
+ */
+function smoothContour(
+  pts: { x: number; y: number }[],
+  iterations: number
+): { x: number; y: number }[] {
+  if (pts.length < 4 || iterations <= 0) return pts;
+  let result = [...pts];
+  for (let iter = 0; iter < iterations; iter++) {
+    const next: { x: number; y: number }[] = [];
+    for (let i = 0; i < result.length; i++) {
+      const prev = result[(i - 1 + result.length) % result.length];
+      const curr = result[i];
+      const nnext = result[(i + 1) % result.length];
+      next.push({
+        x: (prev.x + curr.x * 2 + nnext.x) / 4,
+        y: (prev.y + curr.y * 2 + nnext.y) / 4,
+      });
     }
+    result = next;
+  }
+  return result;
+}
 
-    if (isGradient) {
-      const startColor = colors[0];
-      const endColor = colors[colors.length - 1];
-      const startHex = `#${((1 << 24) + (startColor[0] << 16) + (startColor[1] << 8) + startColor[2]).toString(16).slice(1)}`;
-      const endHex = `#${((1 << 24) + (endColor[0] << 16) + (endColor[1] << 8) + endColor[2]).toString(16).slice(1)}`;
+/**
+ * Detect geometric shapes directly from pixel data (indexed image).
+ * More reliable than contour-based detection since the contour tracer
+ * produces many tiny 4-point segments instead of clean boundaries.
+ */
+export function detectShapeFromPixels(
+  indexed: Uint8Array,
+  width: number,
+  height: number,
+  colorIdx: number,
+  tolerance: number
+): string | null {
+  // Collect all pixel positions for this color
+  const points: { x: number; y: number }[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (indexed[y * width + x] === colorIdx) points.push({ x, y });
+    }
+  }
+  if (points.length < 10) return null;
 
-      defs.push(
-        `<linearGradient id="grad-v-${col}" x1="0%" y1="0%" x2="0%" y2="100%">` +
-        `<stop offset="0%" stop-color="${startHex}"/>` +
-        `<stop offset="100%" stop-color="${endHex}"/>` +
-        `</linearGradient>`
-      );
+  // Bounding box
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const bboxW = maxX - minX + 1;
+  const bboxH = maxY - minY + 1;
+  const avgR = (bboxW + bboxH) / 4;
+
+  // Check circle: for a filled circle, most pixels should be within the bounding circle
+  if (Math.abs(bboxW - bboxH) < avgR * 0.2) {
+    const circleArea = Math.PI * avgR * avgR;
+    const fillRatio = points.length / circleArea;
+    if (fillRatio > 0.7 && fillRatio < 1.3) {
+      // Verify: most pixels should be within the bounding circle
+      let insideCircle = 0;
+      for (const p of points) {
+        const dist = Math.hypot(p.x - cx, p.y - cy);
+        if (dist <= avgR + 1) insideCircle++;
+      }
+      if (insideCircle / points.length > 0.95) {
+        return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${avgR.toFixed(1)}"/>`;
+      }
     }
   }
 
-  return defs.length > 0 ? `<defs>${defs.join("")}</defs>` : "";
+  // Check rectangle: pixels should fill the bounding box
+  const bboxArea = bboxW * bboxH;
+  if (points.length / bboxArea > 0.75 && bboxW > 2 && bboxH > 2) {
+    // Additional check: most pixels should be near edges (hollow-ish) or fill (solid)
+    // For solid rects, points/bbox ratio is high
+    if (points.length / bboxArea > 0.85) {
+      return `<rect x="${minX.toFixed(1)}" y="${minY.toFixed(1)}" width="${bboxW.toFixed(1)}" height="${bboxH.toFixed(1)}"/>`;
+    }
+  }
+
+  return null;
 }
 
 export function detectGeometricShapes(
@@ -460,12 +595,15 @@ export function detectGeometricShapes(
   for (const contour of contours) {
     if (contour.length < 8) continue;
 
+    // Smooth the contour to reduce pixel staircase artifacts before checking
+    const smoothed = smoothContour(contour, 2);
+
     // Check for ellipse (fit bounding ellipse)
     let minX = Infinity,
       minY = Infinity,
       maxX = -Infinity,
       maxY = -Infinity;
-    for (const p of contour) {
+    for (const p of smoothed) {
       minX = Math.min(minX, p.x);
       minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x);
@@ -479,7 +617,7 @@ export function detectGeometricShapes(
 
     // Check if contour is close to the bounding ellipse
     let maxDeviation = 0;
-    for (const p of contour) {
+    for (const p of smoothed) {
       const angle = Math.atan2(p.y - cy, p.x - cx);
       const expectedX = cx + rx * Math.cos(angle);
       const expectedY = cy + ry * Math.sin(angle);
@@ -496,6 +634,29 @@ export function detectGeometricShapes(
       } else {
         shapes.push(
           `<ellipse cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}"/>`
+        );
+      }
+      continue;
+    }
+
+    // Check for rectangle: contour should fill ≥85% of bounding box
+    const bboxW = maxX - minX;
+    const bboxH = maxY - minY;
+    if (bboxW > 2 && bboxH > 2 && smoothed.length >= 4) {
+      // Count how many contour points are near the bbox edges
+      let nearEdge = 0;
+      const edgeTolerance = Math.max(1.5, Math.min(bboxW, bboxH) * 0.1);
+      for (const p of smoothed) {
+        const onLeft = Math.abs(p.x - minX) < edgeTolerance;
+        const onRight = Math.abs(p.x - maxX) < edgeTolerance;
+        const onTop = Math.abs(p.y - minY) < edgeTolerance;
+        const onBottom = Math.abs(p.y - maxY) < edgeTolerance;
+        if (onLeft || onRight || onTop || onBottom) nearEdge++;
+      }
+      const edgeRatio = nearEdge / smoothed.length;
+      if (edgeRatio > 0.7) {
+        shapes.push(
+          `<rect x="${minX.toFixed(1)}" y="${minY.toFixed(1)}" width="${bboxW.toFixed(1)}" height="${bboxH.toFixed(1)}"/>`
         );
       }
     }

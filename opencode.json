@@ -1,5 +1,4 @@
 {
-  "$schema": "https://opencode.ai/config.json",
   "plugin": ["@dietrichgebert/ponytail"],
   "mcp": {
     "playwright": {
@@ -7,8 +6,7 @@
       "command": [
         "npx",
         "@playwright/mcp@latest",
-        "--config",
-        "./playwright-mcp-config.json"
+        "--browser", "chromium"
       ],
       "enabled": true
     }

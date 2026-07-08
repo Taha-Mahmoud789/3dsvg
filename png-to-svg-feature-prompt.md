@@ -264,6 +264,27 @@ The goal of this section: the tool should handle **any real-world brand logo**, 
 
 - All new sliders, buttons, and controls in the PNG-to-SVG panel must be keyboard-navigable and carry appropriate `aria-label`s, consistent with the rest of the editor's accessibility standard — this should not be the one part of the tool that's mouse-only.
 
+## Project Stability & Ownership (Post-Fork Hardening)
+
+Now that this is a standalone repository (no longer tracking the original upstream), harden it as follows:
+
+### 22. CI pipeline (GitHub Actions)
+
+- Add a GitHub Actions workflow that runs on every push/PR: install dependencies, run the production build (both `packages/engine` and `packages/web`), run typecheck (`tsc --noEmit`), and run lint. The workflow should fail the run (red X) if any of these fail, so regressions are caught automatically instead of relying on someone remembering to run these manually.
+
+### 23. Unit tests for the vectorization logic
+
+- The Playwright loop covers the UI end-to-end but doesn't isolate the core algorithms. Add unit tests (using the repo's existing test runner if one exists, otherwise a standard lightweight one like Vitest) covering, at minimum: color quantization (including the Lab-space distance and locked-color preservation), the 2D rectangle-merging algorithm for Pixel Grid mode, and shape-primitive detection (circle/rect approximation). These should run fast, without a browser, and be included in the CI workflow above.
+
+### 24. README and project identity update
+
+- Update the README to document the new PNG-to-SVG feature (what it does, the two modes, key settings) so it's clear this repo now includes functionality beyond the original project.
+- **Do not remove the original MIT license attribution** to the upstream author (Renato Costa) in the `LICENSE` file — this is a legal requirement of the MIT license, not just a courtesy, and applies regardless of how much the codebase has since changed. Adding a note that the repo is now an independently maintained fork/continuation is fine and encouraged; removing the original copyright notice is not.
+
+### 25. Clear in-UI error handling
+
+- When tracing/vectorization fails for any reason (corrupt image, unsupported format, file too large, decode failure, worker crash), show a clear, human-readable error message directly in the panel UI — not just a console error the user will never see. Include enough detail for the user to understand what to do next (e.g. "This file couldn't be read as an image" vs. a generic "Something went wrong").
+
 ## Acceptance Criteria
 
 - [ ] User can upload a PNG/JPG and choose between "Smooth Trace" and "Pixel Grid" modes.
@@ -301,3 +322,7 @@ The goal of this section: the tool should handle **any real-world brand logo**, 
 - [ ] Users can save and reapply named settings presets.
 - [ ] The final SVG is validated by an actual internal render check before handoff/download, not assumed valid.
 - [ ] All new PNG-to-SVG panel controls are keyboard-navigable with correct `aria-label`s.
+- [ ] A CI workflow runs build, typecheck, and lint on every push/PR and fails visibly on any error.
+- [ ] Unit tests exist for quantization (incl. Lab distance + color lock), 2D rect-merging, and shape-primitive detection, and run in CI.
+- [ ] README documents the new feature; original MIT license attribution is preserved unchanged in `LICENSE`.
+- [ ] Tracing/processing failures show a clear, human-readable error in the UI, not just a console error.

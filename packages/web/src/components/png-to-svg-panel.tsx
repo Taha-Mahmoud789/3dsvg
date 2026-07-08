@@ -159,6 +159,7 @@ export function PngToSvgPanel({
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [presetName, setPresetName] = useState("");
   const [showPresetInput, setShowPresetInput] = useState(false);
@@ -198,6 +199,9 @@ export function PngToSvgPanel({
       const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
       setImageData(data);
       setOriginalSize(file.size);
+    };
+    img.onerror = () => {
+      setTraceError("Failed to decode image. The file may be corrupted or in an unsupported format.");
     };
     img.src = imageUrl;
   }, [imageUrl, file.size]);
@@ -290,6 +294,7 @@ export function PngToSvgPanel({
       setProgress(0);
       setSvgValidated(false);
       setSimilarityScore(null);
+      setTraceError(null);
 
       const worker = new Worker(
         new URL("../lib/png-to-svg/worker.ts", import.meta.url),
@@ -298,12 +303,22 @@ export function PngToSvgPanel({
       workerRef.current = worker;
 
       worker.onmessage = async (e) => {
-        const { svg, sizeBytes, isValid } = e.data;
+        const { svg, sizeBytes, isValid, error } = e.data;
+        worker.terminate();
+
+        if (error) {
+          setTraceError(error);
+          setResultSvg("");
+          setProcessing(false);
+          setProgress(0);
+          return;
+        }
+
+        setTraceError(null);
         setResultSvg(svg);
         setSvgSize(sizeBytes);
         setProcessing(false);
         setProgress(100);
-        worker.terminate();
 
         // Validate SVG renders correctly
         if (svg) {
@@ -314,8 +329,11 @@ export function PngToSvgPanel({
         }
       };
 
-      worker.onerror = () => {
+      worker.onerror = (e) => {
+        setTraceError(`Vectorization failed: ${e.message || "Unknown error"}`);
+        setResultSvg("");
         setProcessing(false);
+        setProgress(0);
       };
 
       worker.postMessage({
@@ -434,6 +452,13 @@ export function PngToSvgPanel({
       {colorProfile === "cmyk" && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-300">
           CMYK color profile detected — colors have been converted to sRGB. Some color accuracy may be lost.
+        </div>
+      )}
+
+      {/* Trace error */}
+      {traceError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-300">
+          Vectorization failed: {traceError}
         </div>
       )}
 

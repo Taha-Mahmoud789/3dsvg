@@ -86,9 +86,10 @@ self.onmessage = function (e: MessageEvent<WorkerRequest>) {
       };
 
       // Detect gradients before tracing (smooth mode only)
-      gradientDefs = detectGradients(imageData, indexed, palette, width, height);
+      const gradientInfo = detectGradients(imageData, indexed, palette, width, height);
+      gradientDefs = gradientInfo.defs;
 
-      paths = traceSmooth(indexed, palette, width, height, traceOpts);
+      paths = traceSmooth(indexed, palette, width, height, { ...traceOpts, gradientMeta: gradientInfo.meta });
     } else {
       const pixelOpts: PixelGridOptions = {
         gridResolution: options.gridResolution,

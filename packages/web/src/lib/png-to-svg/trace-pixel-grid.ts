@@ -8,7 +8,7 @@ export interface PixelGridOptions {
   smoothEdges: boolean;
 }
 
-interface Rect {
+export interface Rect {
   x: number;
   y: number;
   w: number;
@@ -71,7 +71,7 @@ function downsample(
  * For each color, find the largest possible rectangle that fits entirely
  * within same-color cells, mark it, and repeat.
  */
-function mergeRects(cells: Uint8Array, w: number, h: number): Rect[] {
+export function mergeRects(cells: Uint8Array, w: number, h: number): Rect[] {
   const used = new Uint8Array(w * h);
   const rects: Rect[] = [];
 

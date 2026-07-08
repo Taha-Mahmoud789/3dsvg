@@ -22,7 +22,13 @@ The web editor imports the engine as a workspace dependency (`"3dsvg": "file:../
 
 ## Features
 
-- **4 input methods** — Text (10 Google Fonts), Pixel Editor, SVG Code, File Upload
+- **5 input methods** — Text (10 Google Fonts), Pixel Editor, SVG Code, File Upload, **PNG/JPG Upload with Vectorization**
+- **PNG-to-SVG vectorization** — Upload raster images and convert them to clean SVGs with two modes:
+  - **Smooth Trace** — Potrace-style bezier curves with perceptual color quantization (CIE Lab), gradient detection, geometric shape primitives, stroke-based line detection, and seam prevention
+  - **Pixel Grid** — 2D greedy rectangle merging for pixel art, with configurable grid resolution and smooth edges toggle
+- **Color controls** — Full color (no quantization), configurable palette size (2–256), grayscale, B&W modes, Lab-perceptual distance, manual brand-color lock (eyedropper)
+- **Auto-settings** — Smart analysis on upload suggests optimal mode and color count
+- **Export** — Download SVG directly or continue to 3D pipeline
 - **10 material presets** — Default, Plastic, Metal, Glass, Rubber, Chrome, Gold, Clay, Emissive, Holographic
 - **7 animations** — Spin, Float, Pulse, Wobble, Swing, Spin+Float, or static
 - **Textures** — 10 procedural presets or upload your own
@@ -49,3 +55,5 @@ The web editor imports the engine as a workspace dependency (`"3dsvg": "file:../
 ## License
 
 MIT — [Renato Costa](https://renato.works)
+
+This repository is an independent fork/extension of the original [3dsvg](https://github.com/renatocosta/3dsvg) project by Renato Costa. All original copyright and license terms apply.

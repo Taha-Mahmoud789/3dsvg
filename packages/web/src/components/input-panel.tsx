@@ -249,14 +249,18 @@ export function InputPanel({
       handleRasterUpload(file);
       onRasterFileChange?.(file);
     } else {
-      setUploadedFileName(file.name);
+      // Validate it looks like SVG before accepting
       const reader = new FileReader();
       reader.onload = (ev) => {
         const text = ev.target?.result as string;
-        if (text) {
-          setUploadedSvgContent(text);
-          onFileSvgChange(text);
+        if (!text || (!text.includes('<svg') && !text.includes('<SVG'))) {
+          setRasterError("Not a valid SVG file. Please upload an SVG, PNG, or JPG.");
+          setUploadedFileName(file.name);
+          return;
         }
+        setUploadedFileName(file.name);
+        setUploadedSvgContent(text);
+        onFileSvgChange(text);
       };
       reader.readAsText(file);
     }
