@@ -263,6 +263,9 @@ export function quantize(
     const colorMap = new Map<string, number>();
     const palette: [number, number, number, number][] = [];
 
+    // Index 0 is always transparent — avoids collision with first real color
+    palette.push([0, 0, 0, 0]);
+
     if (existingPalette && existingPalette.size <= colorCount) {
       // Use existing palette
       for (const [key] of existingPalette) {
@@ -317,17 +320,21 @@ export function quantize(
   const targetColors = Math.min(colorCount, allPixels.length);
   const palette = medianCut(allPixels, targetColors);
 
-  // Build Lab palette for distance comparison
+  // Prepend transparent entry at index 0 so transparent pixels never
+  // collide with a real palette color
+  palette.unshift([0, 0, 0, 0]);
+
+  // Build Lab palette for distance comparison (skip index 0 = transparent)
   const labPalette = palette.map((c) => rgbToLab(c[0], c[1], c[2]));
 
-  // Map locked colors to exact palette entries
+  // Map locked colors to exact palette entries (offset by +1 for transparent entry)
   const lockedMap = new Map<number, number>();
   for (const [r, g, b] of lockedRgb) {
     const hex = rgbToHex(r, g, b);
-    let bestIdx = 0;
+    let bestIdx = 1;
     let bestDist = Infinity;
     const lab = rgbToLab(r, g, b);
-    for (let i = 0; i < labPalette.length; i++) {
+    for (let i = 1; i < labPalette.length; i++) {
       const d = labDistance(lab, labPalette[i]);
       if (d < bestDist) {
         bestDist = d;
@@ -348,9 +355,9 @@ export function quantize(
       continue;
     }
     const pixelLab = rgbToLab(processed[i], processed[i + 1], processed[i + 2]);
-    let bestIdx = 0;
+    let bestIdx = 1;
     let bestDist = Infinity;
-    for (let j = 0; j < labPalette.length; j++) {
+    for (let j = 1; j < labPalette.length; j++) {
       const d = labDistance(pixelLab, labPalette[j]);
       if (d < bestDist) {
         bestDist = d;

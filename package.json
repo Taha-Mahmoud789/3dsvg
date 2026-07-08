@@ -14,7 +14,9 @@
     "node": ">=18"
   },
   "dependencies": {
-    "caniuse-lite": "^1.0.30001803"
+    "caniuse-lite": "^1.0.30001803",
+    "potrace": "^2.1.8",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1"

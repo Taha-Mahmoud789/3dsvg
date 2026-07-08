@@ -20,6 +20,7 @@
 
 # qa artifacts
 /qa-screenshots/
+/test-results/
 
 # misc
 .DS_Store

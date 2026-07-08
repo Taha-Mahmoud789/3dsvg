@@ -44,6 +44,10 @@ function traceContour(
     x >= 0 && x < w && y >= 0 && y < h && indexed[y * w + x] === colorIdx;
   const edges: { x: number; y: number }[][] = [];
 
+  // 8-connected Moore neighborhood directions (clockwise from right)
+  const dx = [1, 1, 0, -1, -1, -1, 0, 1];
+  const dy = [0, 1, 1, 1, 0, -1, -1, -1];
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!isColor(x, y) || visited[y * w + x]) continue;
@@ -52,39 +56,27 @@ function traceContour(
       const contour: { x: number; y: number }[] = [];
       let cx = x,
         cy = y;
-      let prevDir = 0; // 0=right,1=down,2=left,3=up
+      let prevDir = 6; // start looking up (since we came from outside left edge)
 
-      do {
+      while (true) {
         visited[cy * w + cx] = 1;
         contour.push({ x: cx, y: cy });
 
-        // Moore neighborhood tracing — skip visited pixels to prevent cycles,
-        // but allow return to start point to close the contour
-        const dirs = [
-          [1, 0],
-          [1, 1],
-          [0, 1],
-          [-1, 1],
-          [-1, 0],
-          [-1, -1],
-          [0, -1],
-          [1, -1],
-        ];
         let found = false;
         for (let d = 0; d < 8; d++) {
           const idx = (prevDir + 6 + d) % 8;
-          const nx = cx + dirs[idx][0];
-          const ny = cy + dirs[idx][1];
-          if (isColor(nx, ny) && (nx === x && ny === y || !visited[ny * w + nx])) {
+          const nx = cx + dx[idx];
+          const ny = cy + dy[idx];
+          if (isColor(nx, ny) && !visited[ny * w + nx]) {
             cx = nx;
             cy = ny;
-            prevDir = (idx + 4) % 8;
+            prevDir = idx;
             found = true;
             break;
           }
         }
         if (!found) break;
-      } while (cx !== x || cy !== y);
+      }
 
       if (contour.length >= 3) edges.push(contour);
     }
@@ -154,7 +146,8 @@ function contoursToPath(
   tolerance: number
 ): string[] {
   return contours.map((pts) => {
-    const simplified = simplifyPath([...pts, pts[0]], tolerance);
+    const closed = [...pts, pts[0]];
+    const simplified = simplifyPath(closed, tolerance);
     if (simplified.length <= 1) return "";
 
     let d = `M ${simplified[0].x} ${simplified[0].y}`;
@@ -345,11 +338,43 @@ export function traceSmooth(
     }
   }
 
-  const groups: string[] = []; // grouped by color
+  // Compute per-color pixel counts and bounding boxes (single pass)
+  const pixelCounts = new Uint32Array(palette.length);
+  const colorBboxes: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+  for (let ci = 0; ci < palette.length; ci++) colorBboxes[ci] = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  for (let i = 0; i < indexed.length; i++) {
+    const ci = indexed[i];
+    pixelCounts[ci]++;
+    const x = i % width;
+    const y = (i / width) | 0;
+    const bb = colorBboxes[ci];
+    if (x < bb.minX) bb.minX = x;
+    if (y < bb.minY) bb.minY = y;
+    if (x > bb.maxX) bb.maxX = x;
+    if (y > bb.maxY) bb.maxY = y;
+  }
 
+  const contained = (
+    inner: { minX: number; minY: number; maxX: number; maxY: number },
+    outer: { minX: number; minY: number; maxX: number; maxY: number }
+  ) => inner.minX >= outer.minX && inner.minY >= outer.minY && inner.maxX <= outer.maxX && inner.maxY <= outer.maxY;
+
+  const collected: { group: string; ci: number; count: number }[] = [];
+
+  // ponytail: track bboxes of detected geometric shapes so small anti-aliasing
+  // fragments that fall inside them can be suppressed
+  const detectedShapeBboxes: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+
+  const totalPixels = width * height;
   for (let ci = 0; ci < palette.length; ci++) {
     const [r, g, b, a] = palette[ci];
     if (a < 128) continue;
+    // ponytail: skip colors whose bounding box covers the full image — these are
+    // backgrounds whose boundary contours are huge (image border + every hole).
+    // The old broken tracer produced tiny 4-point contours that got filtered;
+    // now that it's fixed, these cause massive slowdowns for no visual benefit.
+    const bb = colorBboxes[ci];
+    if (bb.minX === 0 && bb.minY === 0 && bb.maxX === width - 1 && bb.maxY === height - 1 && pixelCounts[ci] > totalPixels * 0.4) continue;
 
     const contours = traceContour(indexed, width, height, ci);
     const validContours = contours.filter((c) => c.length >= speckleSize);
@@ -365,11 +390,24 @@ export function traceSmooth(
     // Try pixel-based shape detection first (more reliable than contour-based)
     const pixelShape = detectShapeFromPixels(indexed, width, height, ci, tolerance + 1);
     if (pixelShape) {
+      detectedShapeBboxes.push(colorBboxes[ci]);
       groupParts.push(pixelShape.replace("/>", ` ${fill}${opacity}/>`));
     } else {
       // Fallback: individual contour paths
       for (let i = 0; i < validContours.length; i++) {
         const contour = validContours[i];
+
+        // Suppress small anti-aliasing fragments whose centroid sits inside a
+        // previously detected geometric shape's bounding box
+        if (contour.length < 20 && detectedShapeBboxes.length > 0) {
+          let cx = 0, cy = 0;
+          for (const p of contour) { cx += p.x; cy += p.y; }
+          cx /= contour.length;
+          cy /= contour.length;
+          if (detectedShapeBboxes.some((b) => cx >= b.minX && cx <= b.maxX && cy >= b.minY && cy <= b.maxY)) {
+            continue;
+          }
+        }
 
         const stroke = detectStroke(contour);
         if (stroke) {
@@ -391,11 +429,24 @@ export function traceSmooth(
     }
 
     if (groupParts.length > 0) {
-      groups.push(`<g data-color="${ci}">${groupParts.join("")}</g>`);
+      collected.push({ group: `<g data-color="${ci}">${groupParts.join("")}</g>`, ci, count: pixelCounts[ci] });
     }
   }
 
-  return groups.join("\n");
+  // ponytail: spatial-containment sort — shape A renders after (on top of) shape B
+  // when A's bounding box is entirely inside B's. Pixel count breaks ties when
+  // there is no containment relationship (larger area renders first / behind).
+  collected.sort((a, b) => {
+    const bbA = colorBboxes[a.ci];
+    const bbB = colorBboxes[b.ci];
+    const aInB = contained(bbA, bbB);
+    const bInA = contained(bbB, bbA);
+    if (aInB && !bInA) return 1;  // A inside B → A on top
+    if (bInA && !aInB) return -1; // B inside A → B on top
+    return b.count - a.count;     // no containment → larger behind
+  });
+  
+  return collected.map((c) => c.group).join("\n");
 }
 
 export interface GradientMeta {

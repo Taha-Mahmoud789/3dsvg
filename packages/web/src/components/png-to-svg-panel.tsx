@@ -264,7 +264,9 @@ export function PngToSvgPanel({
           totalDiff += Math.sqrt(dr * dr + dg * dg + db * db);
           sampled++;
         }
-        const avgDiff = sampled > 0 ? totalDiff / sampled / 255 : 0;
+        // Max Euclidean distance in RGB space is sqrt(255^2*3) ≈ 441.67
+        const maxDist = 255 * Math.sqrt(3);
+        const avgDiff = sampled > 0 ? totalDiff / sampled / maxDist : 0;
         setSimilarityScore(Math.round((1 - avgDiff) * 100));
       };
       svgImg.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
