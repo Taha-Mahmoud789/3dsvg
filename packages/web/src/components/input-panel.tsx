@@ -28,77 +28,6 @@ import {
 } from "@/components/ui/tooltip";
 import { PixelEditor } from "@/components/pixel-editor";
 import { TextInput } from "@/components/text-input";
-import { PngToSvgPanel } from "@/components/png-to-svg-panel";
-
-const RASTER_TYPES = /\.(png|jpe?g|gif|webp|bmp|ico)$/i;
-const RASTER_MIME = /^image\/(png|jpe?g|gif|webp|bmp|x-icon)$/;
-
-function isRasterFile(file: File): boolean {
-  if (RASTER_MIME.test(file.type)) return true;
-  return RASTER_TYPES.test(file.name);
-}
-
-function validateImageMagicBytes(buffer: ArrayBuffer): boolean {
-  const bytes = new Uint8Array(buffer.slice(0, 16));
-  // PNG: 89 50 4E 47
-  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return true;
-  // JPEG: FF D8 FF
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return true;
-  // GIF: 47 49 46 38
-  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return true;
-  // WebP: RIFF....WEBP
-  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return true;
-  // BMP: 42 4D
-  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return true;
-  return false;
-}
-
-/**
- * Detect APNG by scanning for the acTL (animation control) chunk
- * in the PNG binary data. Returns true if the PNG has an acTL chunk
- * before the first IDAT chunk.
- */
-function detectApng(buffer: ArrayBuffer): boolean {
-  const bytes = new Uint8Array(buffer);
-  // PNG signature is 8 bytes, then chunks start
-  let offset = 8;
-  while (offset + 8 <= bytes.length) {
-    const chunkLen = (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
-    const chunkType = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    if (chunkType === "acTL") return true;
-    if (chunkType === "IDAT") return false; // IDAT before acTL = not animated
-    offset += 12 + chunkLen; // 4 len + 4 type + 4 crc + chunkLen
-  }
-  return false;
-}
-
-/**
- * Detect ICC/CMYK color profiles in PNG binary data.
- * Returns 'cmyk' if cHRM or iCCP with CMYK intent is found, 'srgb' otherwise.
- * Browser canvas automatically converts to sRGB, but CMYK PNGs may lose color
- * accuracy during that conversion, so we warn the user.
- */
-function detectColorProfile(buffer: ArrayBuffer): "cmyk" | "srgb" {
-  const bytes = new Uint8Array(buffer);
-  let offset = 8;
-  while (offset + 8 <= bytes.length) {
-    const chunkLen = (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
-    const chunkType = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    if (chunkType === "iCCP") {
-      // iCCP chunk: check if profile name contains "CMYK"
-      const nameStart = offset + 8;
-      let nameEnd = nameStart;
-      while (nameEnd < offset + 8 + chunkLen && bytes[nameEnd] !== 0) nameEnd++;
-      const name = String.fromCharCode(...bytes.slice(nameStart, nameEnd));
-      if (name.toLowerCase().includes("cmyk")) return "cmyk";
-    }
-    if (chunkType === "sRGB") return "srgb";
-    if (chunkType === "IDAT") break; // stop after data starts
-    offset += 12 + chunkLen;
-  }
-  return "srgb";
-}
 
 interface InputPanelProps {
   inputTab: string;
@@ -122,12 +51,6 @@ const tabs = [
   { value: "file", icon: FileUp, label: "Upload File" },
 ];
 
-const contentVariants = {
-  enter: { opacity: 0, x: -8 },
-  active: { opacity: 1, x: 0, transition: { duration: 0.15 } },
-  exit: { opacity: 0, x: -8, transition: { duration: 0.1 } },
-};
-
 export function InputPanel({
   inputTab,
   onInputTabChange,
@@ -150,9 +73,7 @@ export function InputPanel({
   }, []);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [uploadedSvgContent, setUploadedSvgContent] = useState<string | null>(null);
-  const [rasterFile, setRasterFile] = useState<File | null>(null);
-  const [rasterImageUrl, setRasterImageUrl] = useState<string | null>(null);
-  const [rasterError, setRasterError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const svgFileInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -161,8 +82,6 @@ export function InputPanel({
     if (droppedFile) {
       setUploadedFileName(droppedFile.name);
       setUploadedSvgContent(droppedFile.content);
-      setRasterFile(null);
-      setRasterImageUrl(null);
       setExpanded(true);
     }
   }, [droppedFile]);
@@ -196,66 +115,31 @@ export function InputPanel({
     }
   };
 
-  const handleRasterUpload = async (file: File) => {
-    setRasterError(null);
-    setUploadedFileName(file.name);
-    setUploadedSvgContent(null);
-
-    // Validate magic bytes
-    const buffer = await file.arrayBuffer();
-    if (!validateImageMagicBytes(buffer)) {
-      setRasterError("Not a valid image file. Please upload a PNG, JPG, or WebP.");
-      return;
-    }
-
-    // Size limit: 10MB
-    if (file.size > 10 * 1024 * 1024) {
-      setRasterError("Image is too large (max 10 MB). Please resize it first.");
-      return;
-    }
-
-    const url = URL.createObjectURL(file);
-    setRasterFile(file);
-    setRasterImageUrl(url);
-  };
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (isRasterFile(file)) {
-      handleRasterUpload(file);
-    } else {
-      // Validate it looks like SVG before accepting
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const text = ev.target?.result as string;
-        if (!text || (!text.includes('<svg') && !text.includes('<SVG'))) {
-          setRasterError("Not a valid SVG file. Please upload an SVG, PNG, or JPG.");
-          setUploadedFileName(file.name);
-          return;
-        }
+    setUploadError(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      if (!text || (!text.includes('<svg') && !text.includes('<SVG'))) {
+        setUploadError("Not a valid SVG file.");
         setUploadedFileName(file.name);
-        setUploadedSvgContent(text);
-        onFileSvgChange(text);
-      };
-      reader.readAsText(file);
-    }
+        return;
+      }
+      setUploadedFileName(file.name);
+      setUploadedSvgContent(text);
+      onFileSvgChange(text);
+    };
+    reader.readAsText(file);
   };
 
-  const handleRasterConfirm = () => {
-    setRasterFile(null);
-    setRasterImageUrl(null);
-  };
-
-  const handleRasterCancel = () => {
-    setRasterFile(null);
+  const handleClearUpload = () => {
     setUploadedFileName(null);
-    setRasterError(null);
-    if (rasterImageUrl) {
-      URL.revokeObjectURL(rasterImageUrl);
-      setRasterImageUrl(null);
-    }
+    setUploadedSvgContent(null);
+    setUploadError(null);
+    onFileSvgChange("");
     if (svgFileInputRef.current) svgFileInputRef.current.value = "";
   };
 
@@ -324,18 +208,7 @@ export function InputPanel({
               </div>
             </div>
             <div className={inputTab === "file" ? "" : "hidden"}>
-              {rasterFile && rasterImageUrl ? (
-                <PngToSvgPanel
-                  file={rasterFile}
-                  imageUrl={rasterImageUrl}
-                  onConfirm={(svg: string) => {
-                    onFileSvgChange(svg);
-                    setRasterFile(null);
-                    setRasterImageUrl(null);
-                  }}
-                  onCancel={handleRasterCancel}
-                />
-              ) : uploadedFileName ? (
+              {uploadedFileName ? (
                 <div className="space-y-3">
                   {previewUrl && (
                     <img
@@ -344,49 +217,42 @@ export function InputPanel({
                       className="rounded-lg border border-white/[0.06] bg-white p-4 aspect-square w-full object-contain block"
                     />
                   )}
-                  {rasterError && (
-                    <p className="text-xs text-red-400">{rasterError}</p>
+                  {uploadError && (
+                    <p className="text-xs text-red-400">{uploadError}</p>
                   )}
                   <div className="flex items-center gap-3 rounded-md border border-input p-3">
                     <FileCheck className="h-5 w-5 text-primary shrink-0" />
                     <span className="text-xs text-foreground truncate flex-1">{uploadedFileName}</span>
                     <button
-                      onClick={() => {
-                        setUploadedFileName(null);
-                        setUploadedSvgContent(null);
-                        setRasterFile(null);
-                        setRasterError(null);
-                        onFileSvgChange("");
-                        if (svgFileInputRef.current) svgFileInputRef.current.value = "";
-                      }}
+                      onClick={handleClearUpload}
                       className="shrink-0 p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-3 rounded-md border border-dashed p-6">
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                    <p className="text-xs text-muted-foreground">
-                      Upload SVG, PNG, or JPG
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => svgFileInputRef.current?.click()}
-                    >
-                      Choose File
-                    </Button>
-                  </div>
-                )}
-                <input
-                  ref={svgFileInputRef}
-                  type="file"
-                  accept=".svg,.png,.jpg,.jpeg,.gif,.webp,.bmp"
-                  className="hidden"
-                  onChange={handleFileUpload}
-                />
+              ) : (
+                <div className="flex flex-col items-center gap-3 rounded-md border border-dashed p-6">
+                  <Upload className="h-8 w-8 text-muted-foreground" />
+                  <p className="text-xs text-muted-foreground">
+                    Upload an SVG file
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => svgFileInputRef.current?.click()}
+                  >
+                    Choose File
+                  </Button>
+                </div>
+              )}
+              <input
+                ref={svgFileInputRef}
+                type="file"
+                accept=".svg"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
             </div>
       </motion.div>
     </div>

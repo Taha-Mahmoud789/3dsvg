@@ -2,3 +2,4 @@
 test-results/
 playwright-report/
 tests/*.png
+node_modules/.vite/

@@ -123,9 +123,87 @@ function isViewBoxRect(shape: THREE.Shape, vbW: number, vbH: number): boolean {
   return Math.abs(size.x - vbW) / vbW < tolerance && Math.abs(size.y - vbH) / vbH < tolerance;
 }
 
+/**
+ * Inline <style> block rules as attributes on matching elements.
+ * Three.js SVGLoader does not parse <style> or CSS class selectors,
+ * so SVGs that use `.className { fill: #000 }` + `class="className"`
+ * won't have their styles applied. This pre-processor fixes that.
+ */
+function inlineStyleBlocks(svg: string): string {
+  // Extract all <style> blocks
+  const styleRe = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+  const classRules = new Map<string, Record<string, string>>();
+  let styleMatch: RegExpExecArray | null;
+
+  while ((styleMatch = styleRe.exec(svg)) !== null) {
+    const css = styleMatch[1];
+    // Parse .className { prop: val; ... } rules
+    const ruleRe = /\.([a-zA-Z_][\w-]*)\s*\{([^}]+)\}/g;
+    let ruleMatch: RegExpExecArray | null;
+    while ((ruleMatch = ruleRe.exec(css)) !== null) {
+      const className = ruleMatch[1];
+      const decls = ruleMatch[2];
+      const props: Record<string, string> = {};
+      // Parse property: value; declarations
+      const declRe = /([a-z-]+)\s*:\s*([^;]+)/g;
+      let declMatch: RegExpExecArray | null;
+      while ((declMatch = declRe.exec(decls)) !== null) {
+        props[declMatch[1].trim()] = declMatch[2].trim();
+      }
+      // Merge: later declarations win; first rule for a class wins overall
+      if (!classRules.has(className)) {
+        classRules.set(className, props);
+      } else {
+        const existing = classRules.get(className)!;
+        for (const [k, v] of Object.entries(props)) {
+          if (!(k in existing)) existing[k] = v;
+        }
+      }
+    }
+  }
+
+  if (classRules.size === 0) return svg;
+
+  // Remove <style> blocks from the SVG
+  let result = svg.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+
+  // For each element with class="...", inline matching CSS properties as attributes
+  // Handles both <path ... > and self-closing <path ... />
+  result = result.replace(
+    /<([a-zA-Z]+)(\s[^>]*?)\s+class="([^"]*)"([^>]*?)(\/?)>/g,
+    (_match, tag, before, classes, after, selfClose) => {
+      const classList = classes.split(/\s+/);
+      const inlined: string[] = [];
+      const cssProps = [
+        "fill", "fill-rule", "clip-rule",
+        "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
+        "stroke-dasharray", "stroke-dashoffset", "stroke-miterlimit",
+        "opacity", "fill-opacity", "stroke-opacity",
+      ];
+
+      for (const cls of classList) {
+        const props = classRules.get(cls);
+        if (!props) continue;
+        for (const prop of cssProps) {
+          if (prop in props && !inlined.some((a) => a.startsWith(prop + "="))) {
+            inlined.push(`${prop}="${props[prop]}"`);
+          }
+        }
+      }
+
+      if (inlined.length === 0) {
+        return `<${tag}${before} class="${classes}"${after}${selfClose}>`;
+      }
+      return `<${tag}${before}${after} ${inlined.join(" ")}${selfClose}>`;
+    },
+  );
+
+  return result;
+}
+
 function parseShapesFromSVG(svgString: string): THREE.Shape[] {
   const loader = new SVGLoader();
-  const svgData = loader.parse(svgString);
+  const svgData = loader.parse(inlineStyleBlocks(svgString));
   const allShapes: THREE.Shape[] = [];
 
   // Parse viewBox for background rect detection
