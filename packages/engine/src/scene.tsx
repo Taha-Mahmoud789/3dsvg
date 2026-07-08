@@ -242,12 +242,12 @@ export function useExtrudedGeometry(
 
       // Reduce quality for complex SVGs to keep it responsive
       const complexity = allShapes.length;
-      const qualityScale = complexity > 200 ? 0.3 : complexity > 50 ? 0.6 : 1;
+      const qualityScale = complexity > 200 ? 0.2 : complexity > 50 ? 0.4 : complexity > 20 ? 0.7 : 1;
 
       const scaledDepth = (depth / 10) * maxFlatDim;
       const bevelScale = Math.min(maxFlatDim * 0.02, 1);
-      const bevelSegments = Math.round((3 + smoothness * 20) * qualityScale);
-      const curveSegments = Math.round((24 + smoothness * 176) * qualityScale);
+      const bevelSegments = Math.max(1, Math.round((2 + smoothness * 12) * qualityScale));
+      const curveSegments = Math.max(4, Math.round((12 + smoothness * 40) * qualityScale));
       const bevelThickness = bevelScale * (0.15 + smoothness * 0.2);
       const bevelSize = bevelScale * (0.15 + smoothness * 0.2);
 
@@ -261,35 +261,60 @@ export function useExtrudedGeometry(
       };
 
       // Step 3: Extrude shapes in batches, yielding between each
-      const individualGeos: THREE.ExtrudeGeometry[] = [];
+      let individualGeos: THREE.ExtrudeGeometry[] = [];
+      let merged: THREE.BufferGeometry | null = null;
 
-      for (let i = 0; i < allShapes.length; i++) {
-        if (cancelRef.current || version !== versionRef.current) {
-          individualGeos.forEach((g) => g.dispose());
-          setLoading(false);
-          return;
+      const tryExtrudeAndMerge = async (
+        settings: typeof extrudeSettings,
+        shapes: THREE.Shape[],
+      ): Promise<THREE.BufferGeometry | null> => {
+        const geos: THREE.ExtrudeGeometry[] = [];
+        for (let i = 0; i < shapes.length; i++) {
+          if (cancelRef.current || version !== versionRef.current) {
+            geos.forEach((g) => g.dispose());
+            return null;
+          }
+          geos.push(new THREE.ExtrudeGeometry(shapes[i], settings));
+          if ((i + 1) % BATCH_SIZE === 0) {
+            setProgress(Math.round(((i + 1) / shapes.length) * 80));
+            await yieldToMain();
+          }
         }
-
-        individualGeos.push(new THREE.ExtrudeGeometry(allShapes[i], extrudeSettings));
-
-        if ((i + 1) % BATCH_SIZE === 0) {
-          setProgress(Math.round(((i + 1) / allShapes.length) * 90));
-          await yieldToMain();
+        try {
+          const m = BufferGeometryUtils.mergeGeometries(geos, false);
+          if (!m) { geos.forEach((g) => g.dispose()); return null; }
+          return m;
+        } catch {
+          geos.forEach((g) => g.dispose());
+          return null;
         }
+      };
+
+      // Try with full quality first, then retry with lower quality on OOM
+      merged = await tryExtrudeAndMerge(extrudeSettings, allShapes);
+
+      if (!merged && !cancelRef.current && version === versionRef.current) {
+        const reducedSettings = {
+          ...extrudeSettings,
+          curveSegments: Math.max(2, Math.floor(extrudeSettings.curveSegments * 0.3)),
+          bevelSegments: Math.max(1, Math.floor(extrudeSettings.bevelSegments * 0.3)),
+        };
+        setProgress(50);
+        await yieldToMain();
+        merged = await tryExtrudeAndMerge(reducedSettings, allShapes);
       }
 
-      if (cancelRef.current || version !== versionRef.current) {
-        individualGeos.forEach((g) => g.dispose());
-        setLoading(false);
-        return;
+      if (!merged && !cancelRef.current && version === versionRef.current) {
+        const minimalSettings = {
+          ...extrudeSettings,
+          curveSegments: 2,
+          bevelSegments: 1,
+          bevelEnabled: false,
+        };
+        setProgress(70);
+        await yieldToMain();
+        merged = await tryExtrudeAndMerge(minimalSettings, allShapes);
       }
-
-      setProgress(92);
-      await yieldToMain();
-
-      // Step 4: Merge
-      const merged = BufferGeometryUtils.mergeGeometries(individualGeos, false);
-      individualGeos.forEach((g) => g.dispose());
 
       if (!merged || cancelRef.current || version !== versionRef.current) {
         setResult(EMPTY_RESULT);
