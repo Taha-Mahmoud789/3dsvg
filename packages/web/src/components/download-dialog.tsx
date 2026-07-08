@@ -46,14 +46,14 @@ const PRIMARY_FORMATS: FormatInfo[] = [
     label: "GLB",
     ext: ".glb",
     tagline: "Recommended",
-    detail: "Looks like the editor. Full color, materials, textures. Works in Blender, Unity, AR, web viewers.",
+    detail: "Looks like the editor. Full color per shape, materials, textures. Works in Blender, Unity, AR, web viewers.",
   },
   {
     value: "stl",
     label: "STL",
     ext: ".stl",
-    tagline: "For 3D printing",
-    detail: "Geometry only — no color or material. Opens in any slicer (Cura, Bambu Studio, PrusaSlicer).",
+    tagline: "3D printing",
+    detail: "Geometry only — no color. STL cannot store colors or materials (format limitation). Use GLB for color.",
   },
 ];
 
@@ -61,16 +61,16 @@ const SECONDARY_FORMATS: FormatInfo[] = [
   {
     value: "obj",
     label: "OBJ",
-    ext: ".obj",
+    ext: ".obj + .mtl",
     tagline: "Universal mesh",
-    detail: "Geometry only. Use when a tool doesn't accept GLB.",
+    detail: "Full color via companion .mtl file. Use when a tool doesn't accept GLB.",
   },
   {
     value: "ply",
     label: "PLY",
     ext: ".ply",
-    tagline: "Scans / point clouds",
-    detail: "Geometry only. Niche; most users should pick GLB instead.",
+    tagline: "Per-vertex color",
+    detail: "Full color baked into vertices. Works in MeshLab, CloudCompare, 3D scanners.",
   },
 ];
 

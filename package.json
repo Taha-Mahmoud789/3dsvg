@@ -17,6 +17,7 @@
     "caniuse-lite": "^1.0.30001803"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1"
+    "@playwright/test": "^1.61.1",
+    "jsdom": "^29.1.1"
   }
 }

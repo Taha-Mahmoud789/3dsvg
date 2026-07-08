@@ -22,7 +22,6 @@ import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { ContactShadows, Environment } from "@react-three/drei";
 import * as THREE from "three";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
-import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { type MaterialSettings, materialPresets } from "./materials";
 import { type MaterialPreset } from "./types";
 import {
@@ -95,12 +94,14 @@ function recomputeTriplanarUVs(geo: THREE.BufferGeometry, bb: THREE.Box3) {
 
 export interface ExtrudedGeometryResult {
   geometries: THREE.BufferGeometry[];
+  colors: string[];
   center: THREE.Vector3;
   baseScale: number;
 }
 
 const EMPTY_RESULT: ExtrudedGeometryResult = {
   geometries: [],
+  colors: [],
   center: new THREE.Vector3(),
   baseScale: 1,
 };
@@ -111,6 +112,8 @@ const BATCH_SIZE = 20;
 function yieldToMain(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+const SVG_DEFAULT_FILL = "#000000";
 
 function isViewBoxRect(shape: THREE.Shape, vbW: number, vbH: number): boolean {
   const pts = shape.getPoints(4);
@@ -124,87 +127,266 @@ function isViewBoxRect(shape: THREE.Shape, vbW: number, vbH: number): boolean {
 }
 
 /**
- * Inline <style> block rules as attributes on matching elements.
- * Three.js SVGLoader does not parse <style> or CSS class selectors,
- * so SVGs that use `.className { fill: #000 }` + `class="className"`
- * won't have their styles applied. This pre-processor fixes that.
+ * Use the browser's DOMParser to walk the full SVG element tree and resolve
+ * all fill/stroke colors via proper CSS inheritance rules. This handles:
+ * - fill on parent <g> inherited by child elements
+ * - inline style="fill:#hex" overriding attribute fill
+ * - <style> block rules (.class selectors, element selectors)
+ * - currentColor → fallback to #000000
+ * - CSS variables → fallback to computed/inheritable value
+ * - fill="none" (stroke-only) handled correctly
+ *
+ * After resolution, every shape element gets explicit fill/stroke attributes
+ * so SVGLoader doesn't need to deal with CSS inheritance at all.
  */
-function inlineStyleBlocks(svg: string): string {
-  // Extract all <style> blocks
-  const styleRe = /<style[^>]*>([\s\S]*?)<\/style>/gi;
-  const classRules = new Map<string, Record<string, string>>();
-  let styleMatch: RegExpExecArray | null;
+function resolveSVGColors(svgString: string): string {
+  // We can only use DOMParser in browser context
+  if (typeof DOMParser === "undefined") return svgString;
 
-  while ((styleMatch = styleRe.exec(svg)) !== null) {
-    const css = styleMatch[1];
-    // Parse .className { prop: val; ... } rules
-    const ruleRe = /\.([a-zA-Z_][\w-]*)\s*\{([^}]+)\}/g;
-    let ruleMatch: RegExpExecArray | null;
-    while ((ruleMatch = ruleRe.exec(css)) !== null) {
-      const className = ruleMatch[1];
-      const decls = ruleMatch[2];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgString, "image/svg+xml");
+  const svgEl = doc.querySelector("svg");
+  if (!svgEl) return svgString;
+
+  // SVG default fill is "black" per spec
+  const SVG_DEFAULT_FILL = "#000000";
+
+  // Parse <style> blocks into a stylesheet we can query
+  const styleBlocks = doc.querySelectorAll("style");
+  const styleRules: { selector: string; props: Record<string, string> }[] = [];
+  for (const styleEl of styleBlocks) {
+    const css = styleEl.textContent || "";
+    // Match .className { prop: val; } and element selectors like path { ... }
+    const ruleRe = /([^{]+)\{([^}]+)\}/g;
+    let rm: RegExpExecArray | null;
+    while ((rm = ruleRe.exec(css)) !== null) {
+      const selector = rm[1].trim();
+      const decls = rm[2];
       const props: Record<string, string> = {};
-      // Parse property: value; declarations
       const declRe = /([a-z-]+)\s*:\s*([^;]+)/g;
-      let declMatch: RegExpExecArray | null;
-      while ((declMatch = declRe.exec(decls)) !== null) {
-        props[declMatch[1].trim()] = declMatch[2].trim();
+      let dm: RegExpExecArray | null;
+      while ((dm = declRe.exec(decls)) !== null) {
+        props[dm[1].trim()] = dm[2].trim();
       }
-      // Merge: later declarations win; first rule for a class wins overall
-      if (!classRules.has(className)) {
-        classRules.set(className, props);
-      } else {
-        const existing = classRules.get(className)!;
-        for (const [k, v] of Object.entries(props)) {
-          if (!(k in existing)) existing[k] = v;
-        }
-      }
+      styleRules.push({ selector, props });
     }
   }
 
-  if (classRules.size === 0) return svg;
+  /** Check if an element matches a CSS selector (simplified but covers common cases) */
+  function matchesSelector(el: Element, selector: string): boolean {
+    const sel = selector.trim().toLowerCase();
+    const tag = el.tagName.toLowerCase();
+    const id = el.id;
+    const classes = el.getAttribute("class")?.split(/\s+/) || [];
 
-  // Remove <style> blocks from the SVG
-  let result = svg.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+    // Handle compound selectors like "g .class" or "path.class"
+    if (sel.includes(" ")) {
+      // Descendant selector — check if any ancestor matches the parent part
+      const parts = sel.split(/\s+/);
+      const lastPart = parts[parts.length - 1];
+      if (!matchesSimple(el, lastPart)) return false;
+      // Walk up ancestors to find a match for the preceding parts
+      const parentSel = parts.slice(0, -1).join(" ");
+      let parent = el.parentElement;
+      while (parent) {
+        if (matchesSelector(parent, parentSel)) return true;
+        parent = parent.parentElement;
+      }
+      return false;
+    }
 
-  // For each element with class="...", inline matching CSS properties as attributes
-  // Handles both <path ... > and self-closing <path ... />
-  result = result.replace(
-    /<([a-zA-Z]+)(\s[^>]*?)\s+class="([^"]*)"([^>]*?)(\/?)>/g,
-    (_match, tag, before, classes, after, selfClose) => {
-      const classList = classes.split(/\s+/);
-      const inlined: string[] = [];
-      const cssProps = [
-        "fill", "fill-rule", "clip-rule",
-        "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
-        "stroke-dasharray", "stroke-dashoffset", "stroke-miterlimit",
-        "opacity", "fill-opacity", "stroke-opacity",
-      ];
+    return matchesSimple(el, sel);
+  }
 
-      for (const cls of classList) {
-        const props = classRules.get(cls);
-        if (!props) continue;
-        for (const prop of cssProps) {
-          if (prop in props && !inlined.some((a) => a.startsWith(prop + "="))) {
-            inlined.push(`${prop}="${props[prop]}"`);
+  function matchesSimple(el: Element, sel: string): boolean {
+    const tag = el.tagName.toLowerCase();
+    const id = el.id;
+    const classes = el.getAttribute("class")?.split(/\s+/) || [];
+
+    // ".className" — class selector
+    if (sel.startsWith(".")) {
+      return classes.includes(sel.slice(1));
+    }
+    // "#id" — ID selector
+    if (sel.startsWith("#")) {
+      return id === sel.slice(1);
+    }
+    // "tag.class" — element + class
+    if (sel.includes(".")) {
+      const [t, c] = sel.split(".", 2);
+      return tag === t && classes.includes(c);
+    }
+    // "tag#id" — element + id
+    if (sel.includes("#")) {
+      const [t, i] = sel.split("#", 2);
+      return tag === t && id === i;
+    }
+    // "tag" — element selector
+    return tag === sel;
+  }
+
+  /** Resolve fill for an element by walking up the tree */
+  function resolveFill(el: Element): string {
+    let current: Element | null = el;
+
+    while (current && current !== svgEl) {
+      // Check inline style attribute first (highest priority)
+      const inlineStyle = current.getAttribute("style");
+      if (inlineStyle) {
+        const fillMatch = inlineStyle.match(/(?:^|;\s*)fill\s*:\s*([^;]+)/i);
+        if (fillMatch) {
+          const val = fillMatch[1].trim();
+          if (val !== "inherit" && val !== "unset" && val !== "initial") {
+            return normalizeColor(val);
           }
         }
       }
 
-      if (inlined.length === 0) {
-        return `<${tag}${before} class="${classes}"${after}${selfClose}>`;
+      // Check fill attribute
+      const fillAttr = current.getAttribute("fill");
+      if (fillAttr && fillAttr !== "inherit" && fillAttr !== "unset" && fillAttr !== "initial") {
+        return normalizeColor(fillAttr);
       }
-      return `<${tag}${before}${after} ${inlined.join(" ")}${selfClose}>`;
-    },
-  );
 
-  return result;
+      current = current.parentElement;
+    }
+
+    // Check CSS style rules (applied to the element itself)
+    for (const rule of styleRules) {
+      if (matchesSelector(el, rule.selector)) {
+        if ("fill" in rule.props) {
+          return normalizeColor(rule.props.fill);
+        }
+      }
+    }
+
+    return SVG_DEFAULT_FILL;
+  }
+
+  /** Resolve stroke for an element */
+  function resolveStroke(el: Element): string | null {
+    let current: Element | null = el;
+
+    while (current && current !== svgEl) {
+      const inlineStyle = current.getAttribute("style");
+      if (inlineStyle) {
+        const strokeMatch = inlineStyle.match(/(?:^|;\s*)stroke\s*:\s*([^;]+)/i);
+        if (strokeMatch) {
+          const val = strokeMatch[1].trim();
+          if (val !== "inherit" && val !== "unset" && val !== "initial" && val !== "none") {
+            return normalizeColor(val);
+          }
+          if (val === "none") return null;
+        }
+      }
+
+      const strokeAttr = current.getAttribute("stroke");
+      if (strokeAttr) {
+        if (strokeAttr === "none") return null;
+        if (strokeAttr !== "inherit" && strokeAttr !== "unset" && strokeAttr !== "initial") {
+          return normalizeColor(strokeAttr);
+        }
+      }
+
+      current = current.parentElement;
+    }
+
+    // Check CSS rules for stroke
+    for (const rule of styleRules) {
+      if (matchesSelector(el, rule.selector)) {
+        if ("stroke" in rule.props) {
+          const val = rule.props.stroke;
+          if (val === "none") return null;
+          return normalizeColor(val);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /** Normalize color values: handle named colors, currentColor, hex, rgb, etc. */
+  function normalizeColor(val: string): string {
+    const v = val.trim().toLowerCase();
+    if (v === "none" || v === "transparent") return "none";
+    if (v === "currentColor" || v === "currentcolor") return SVG_DEFAULT_FILL;
+    if (v.startsWith("var(")) return SVG_DEFAULT_FILL; // CSS variables — can't resolve
+    if (v.startsWith("#")) return v;
+    if (v.startsWith("rgb")) return v;
+    if (v.startsWith("hsl")) return v;
+    // Named colors — return as-is, Three.js Color can parse them
+    if (/^[a-z]+$/.test(v)) return val.trim();
+    return val.trim();
+  }
+
+  // Walk all elements in the SVG and inline resolved fill/stroke
+  const allElements = svgEl.querySelectorAll("*");
+  for (const el of allElements) {
+    const tag = el.tagName.toLowerCase();
+    const isShape = ["path", "rect", "circle", "ellipse", "polygon", "polyline", "line", "text", "g"].includes(tag);
+    if (!isShape) continue;
+
+    // Skip <g> elements themselves (they don't get rendered, they just group)
+    // but we need their fill/stroke to be inherited by children
+    const fill = resolveFill(el);
+    const stroke = resolveStroke(el);
+
+    // Inline the resolved fill on the element (unless it's "none")
+    if (fill && fill !== "none") {
+      el.setAttribute("fill", fill);
+    } else if (fill === "none") {
+      el.setAttribute("fill", "none");
+    }
+
+    // Inline the resolved stroke
+    if (stroke) {
+      el.setAttribute("stroke", stroke);
+    }
+
+    // Remove inline style to avoid SVGLoader confusion (we've already extracted what matters)
+    const inlineStyle = el.getAttribute("style");
+    if (inlineStyle) {
+      // Preserve non-fill/stroke style properties
+      const keptProps: string[] = [];
+      const parts = inlineStyle.split(";");
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        const prop = trimmed.split(":")[0]?.trim().toLowerCase();
+        if (prop && prop !== "fill" && prop !== "stroke" && prop !== "fill-opacity" && prop !== "stroke-opacity") {
+          keptProps.push(trimmed);
+        }
+      }
+      if (keptProps.length > 0) {
+        el.setAttribute("style", keptProps.join("; "));
+      } else {
+        el.removeAttribute("style");
+      }
+    }
+  }
+
+  // Remove <style> blocks — we've already inlined everything
+  for (const styleEl of styleBlocks) {
+    styleEl.remove();
+  }
+
+  // Serialize back to string
+  const serializer = new XMLSerializer();
+  return serializer.serializeToString(svgEl);
 }
 
-function parseShapesFromSVG(svgString: string): THREE.Shape[] {
+interface ShapeWithFill {
+  shape: THREE.Shape;
+  fill: string;
+}
+
+function parseShapesFromSVG(svgString: string): ShapeWithFill[] {
   const loader = new SVGLoader();
-  const svgData = loader.parse(inlineStyleBlocks(svgString));
-  const allShapes: THREE.Shape[] = [];
+
+  // Resolve all CSS colors into inline attributes before SVGLoader parses
+  const resolvedSvg = resolveSVGColors(svgString);
+  const svgData = loader.parse(resolvedSvg);
+  const allShapes: ShapeWithFill[] = [];
 
   // Parse viewBox for background rect detection
   const vbMatch = svgString.match(/viewBox\s*=\s*["']\s*([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)/);
@@ -271,10 +453,21 @@ function parseShapesFromSVG(svgString: string): THREE.Shape[] {
               const tdata = loader.parse(tsvg);
               if (tdata.paths.length > 0) {
                 const shapes = SVGLoader.createShapes(tdata.paths[0]);
+                // Try to get fill from the resolved SVG (not the original)
+                const gRe = new RegExp(`<g[^>]*clip-path="url\\(#${clipId}\\)"[^>]*>`, "i");
+                const gMatch = resolvedSvg.match(gRe);
+                let clipFill = "#000000";
+                if (gMatch) {
+                  const gTag = gMatch[0];
+                  const fillMatch = gTag.match(/fill="([^"]+)"/);
+                  if (fillMatch && fillMatch[1] !== "none" && fillMatch[1] !== "transparent") {
+                    clipFill = fillMatch[1];
+                  }
+                }
                 for (const shape of shapes) {
-                  if (tx !== 0 || ty !== 0) shape.translate(tx, ty);
+                  if (tx !== 0 || ty !== 0) (shape as THREE.Shape & { translate: (x: number, y: number) => THREE.Shape }).translate(tx, ty);
                   if (vbW && vbH && isViewBoxRect(shape, vbW, vbH)) continue;
-                  allShapes.push(shape);
+                  allShapes.push({ shape, fill: clipFill });
                 }
               }
             } catch { /* skip */ }
@@ -285,22 +478,26 @@ function parseShapesFromSVG(svgString: string): THREE.Shape[] {
     }
   }
 
-  // Also process regular paths (non-clipPath SVGs, or SVGs with mixed content)
+  // Process regular paths (non-clipPath SVGs, or SVGs with mixed content)
+  // After resolveSVGColors, path.userData.style.fill should have the correct resolved color
   svgData.paths.forEach((path) => {
     const style = path.userData?.style;
-    const hasFill = style?.fill && style.fill !== "none" && style.fill !== "transparent";
-    const hasStroke = style?.stroke && style.stroke !== "none" && style.stroke !== "transparent";
+    const fill = style?.fill;
+    const stroke = style?.stroke;
+    const hasFill = fill && fill !== "none" && fill !== "transparent";
+    const hasStroke = stroke && stroke !== "none" && stroke !== "transparent";
 
     if (hasFill) {
       const shapes = SVGLoader.createShapes(path);
       for (const shape of shapes) {
         if (vbW && vbH && isViewBoxRect(shape, vbW, vbH)) continue;
-        allShapes.push(shape);
+        allShapes.push({ shape, fill: fill! });
       }
     }
 
     if (hasStroke) {
       const strokeWidth = parseFloat(style?.strokeWidth ?? "2");
+      const strokeColor = stroke || "#000000";
       const divisions = 12;
       path.subPaths.forEach((subPath) => {
         const points = subPath.getPoints(divisions);
@@ -328,12 +525,16 @@ function parseShapesFromSVG(svgString: string): THREE.Shape[] {
         for (let i = 1; i < leftSide.length; i++) shape.lineTo(leftSide[i].x, leftSide[i].y);
         for (let i = rightSide.length - 1; i >= 0; i--) shape.lineTo(rightSide[i].x, rightSide[i].y);
         shape.closePath();
-        allShapes.push(shape);
+        allShapes.push({ shape, fill: strokeColor });
       });
     }
 
     if (!hasFill && !hasStroke) {
-      allShapes.push(...SVGLoader.createShapes(path));
+      // Path has no visible fill or stroke — still create the shape
+      // (it might be a clip path or used for other purposes)
+      for (const shape of SVGLoader.createShapes(path)) {
+        allShapes.push({ shape, fill: SVG_DEFAULT_FILL });
+      }
     }
   });
 
@@ -375,7 +576,7 @@ export function useExtrudedGeometry(
     setProgress(0);
 
     (async () => {
-      // Step 1: Parse shapes (fast, synchronous)
+      // Step 1: Parse shapes with fill colors (fast, synchronous)
       const allShapes = parseShapesFromSVG(svgString);
 
       if (allShapes.length === 0 || cancelRef.current || version !== versionRef.current) {
@@ -384,8 +585,8 @@ export function useExtrudedGeometry(
         return;
       }
 
-      // Step 2: Compute extrude settings
-      const tempGeo = new THREE.ShapeGeometry(allShapes);
+      // Step 2: Compute bounding box across all shapes for extrude settings
+      const tempGeo = new THREE.ShapeGeometry(allShapes.map((s) => s.shape));
       tempGeo.computeBoundingBox();
       const flatSize = new THREE.Vector3();
       tempGeo.boundingBox!.getSize(flatSize);
@@ -412,40 +613,32 @@ export function useExtrudedGeometry(
         curveSegments,
       };
 
-      // Step 3: Extrude shapes in batches, yielding between each
-      let individualGeos: THREE.ExtrudeGeometry[] = [];
-      let merged: THREE.BufferGeometry | null = null;
-
-      const tryExtrudeAndMerge = async (
+      // Step 3: Extrude shapes individually (keep separate for per-shape colors)
+      const extrudeShapes = async (
         settings: typeof extrudeSettings,
-        shapes: THREE.Shape[],
-      ): Promise<THREE.BufferGeometry | null> => {
+        shapes: ShapeWithFill[],
+      ): Promise<{ geos: THREE.ExtrudeGeometry[]; colors: string[] } | null> => {
         const geos: THREE.ExtrudeGeometry[] = [];
+        const colors: string[] = [];
         for (let i = 0; i < shapes.length; i++) {
           if (cancelRef.current || version !== versionRef.current) {
             geos.forEach((g) => g.dispose());
             return null;
           }
-          geos.push(new THREE.ExtrudeGeometry(shapes[i], settings));
+          geos.push(new THREE.ExtrudeGeometry(shapes[i].shape, settings));
+          colors.push(shapes[i].fill);
           if ((i + 1) % BATCH_SIZE === 0) {
             setProgress(Math.round(((i + 1) / shapes.length) * 80));
             await yieldToMain();
           }
         }
-        try {
-          const m = BufferGeometryUtils.mergeGeometries(geos, false);
-          if (!m) { geos.forEach((g) => g.dispose()); return null; }
-          return m;
-        } catch {
-          geos.forEach((g) => g.dispose());
-          return null;
-        }
+        return { geos, colors };
       };
 
       // Try with full quality first, then retry with lower quality on OOM
-      merged = await tryExtrudeAndMerge(extrudeSettings, allShapes);
+      let extrudeResult = await extrudeShapes(extrudeSettings, allShapes);
 
-      if (!merged && !cancelRef.current && version === versionRef.current) {
+      if (!extrudeResult && !cancelRef.current && version === versionRef.current) {
         const reducedSettings = {
           ...extrudeSettings,
           curveSegments: Math.max(2, Math.floor(extrudeSettings.curveSegments * 0.3)),
@@ -453,10 +646,10 @@ export function useExtrudedGeometry(
         };
         setProgress(50);
         await yieldToMain();
-        merged = await tryExtrudeAndMerge(reducedSettings, allShapes);
+        extrudeResult = await extrudeShapes(reducedSettings, allShapes);
       }
 
-      if (!merged && !cancelRef.current && version === versionRef.current) {
+      if (!extrudeResult && !cancelRef.current && version === versionRef.current) {
         const minimalSettings = {
           ...extrudeSettings,
           curveSegments: 2,
@@ -465,39 +658,48 @@ export function useExtrudedGeometry(
         };
         setProgress(70);
         await yieldToMain();
-        merged = await tryExtrudeAndMerge(minimalSettings, allShapes);
+        extrudeResult = await extrudeShapes(minimalSettings, allShapes);
       }
 
-      if (!merged || cancelRef.current || version !== versionRef.current) {
+      if (!extrudeResult || cancelRef.current || version !== versionRef.current) {
         setResult(EMPTY_RESULT);
         setLoading(false);
         return;
       }
 
+      const { geos, colors } = extrudeResult;
+
       setProgress(96);
       await yieldToMain();
 
-      // Step 5: UVs + centering
-      merged.computeBoundingBox();
-      merged.computeVertexNormals();
-      recomputeTriplanarUVs(merged, merged.boundingBox!);
+      // Step 4: Compute overall bounding box and center across all geometries
+      const overallBox = new THREE.Box3();
+      for (const geo of geos) {
+        geo.computeBoundingBox();
+        overallBox.union(geo.boundingBox!);
+      }
 
-      const bb = merged.boundingBox!;
+      // Apply UVs to each geometry individually
+      for (const geo of geos) {
+        recomputeTriplanarUVs(geo, geo.boundingBox!);
+        geo.computeVertexNormals();
+      }
+
       const ctr = new THREE.Vector3();
-      bb.getCenter(ctr);
+      overallBox.getCenter(ctr);
       const size = new THREE.Vector3();
-      bb.getSize(size);
+      overallBox.getSize(size);
       const maxDim = Math.max(size.x, size.y, size.z);
       const s = maxDim > 0 ? 4 / maxDim : 1;
 
       if (cancelRef.current || version !== versionRef.current) {
-        merged.dispose();
+        geos.forEach((g) => g.dispose());
         setLoading(false);
         return;
       }
 
       setProgress(100);
-      setResult({ geometries: [merged], center: ctr, baseScale: s });
+      setResult({ geometries: geos, colors, center: ctr, baseScale: s });
       setLoading(false);
     })();
 
@@ -549,7 +751,7 @@ export function ExtrudedSVG({
     texture.needsUpdate = true;
   }, [texture, textureRepeat, textureRotation, textureOffset]);
 
-  const { geometries, center, baseScale, loading, progress } = useExtrudedGeometry(svgString, depth, smoothness);
+  const { geometries, colors, center, baseScale, loading, progress } = useExtrudedGeometry(svgString, depth, smoothness);
 
   const onLoadingChangeRef = useRef(onLoadingChange);
   onLoadingChangeRef.current = onLoadingChange;
@@ -565,13 +767,13 @@ export function ExtrudedSVG({
     >
       {geometries.map((geometry, i) => {
         const preset = materialPresets[materialSettings.preset];
-        const isGold = materialSettings.preset === "gold";
         const isEmissive = materialSettings.preset === "emissive";
         const wantsTransparency = materialSettings.transparent || materialSettings.opacity < 1;
 
-        // Per-shape color from PNG sampling, or fall back to the single color prop
-        const shapeColor = colorMap?.[i] ?? color;
-        const baseColor = texture ? "#ffffff" : isGold ? "#d4a017" : shapeColor;
+        // Per-shape color: use SVG fill color, fall back to colorMap, then to the single color prop
+        const shapeColor = colors[i] || colorMap?.[i] || color;
+        // Material presets affect surface properties only — original SVG colors are never overridden
+        const baseColor = texture ? "#ffffff" : shapeColor;
         const emissiveColor = isEmissive ? shapeColor : "#000000";
         const emissiveIntensity = preset.emissiveIntensity ?? 0;
         const transmissionAmount = wantsTransparency ? (1 - materialSettings.opacity) : 0;
