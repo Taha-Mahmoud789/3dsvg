@@ -925,6 +925,7 @@ export function SVG3DScene({
   return (
     <Canvas
       camera={{ position: [0, 0, zoom], fov }}
+      dpr={[1, 2]}
       style={{ background, visibility: "hidden" }}
       gl={{
         antialias: true,
@@ -1014,21 +1015,21 @@ export function SVG3DScene({
 
       <hemisphereLight args={["#b1e1ff", "#b97a20", 0.5]} />
 
-      <Environment background={false} environmentIntensity={1.5} frames={1}>
+      <Environment background={false} environmentIntensity={1.5} frames={1} resolution={512}>
         <mesh scale={50}>
-          <sphereGeometry args={[1, 32, 32]} />
+          <sphereGeometry args={[1, 64, 64]} />
           <meshBasicMaterial color="#0a0a12" side={THREE.BackSide} />
         </mesh>
         <mesh position={[0, 25, 0]}>
-          <sphereGeometry args={[20, 32, 32]} />
+          <sphereGeometry args={[20, 64, 64]} />
           <meshBasicMaterial color="#ffffff" />
         </mesh>
         <mesh position={[0, 0, 30]}>
-          <sphereGeometry args={[15, 32, 32]} />
+          <sphereGeometry args={[15, 64, 64]} />
           <meshBasicMaterial color="#444444" />
         </mesh>
         <mesh position={[-20, 5, 10]}>
-          <sphereGeometry args={[10, 32, 32]} />
+          <sphereGeometry args={[10, 64, 64]} />
           <meshBasicMaterial color="#333333" />
         </mesh>
       </Environment>
