@@ -1,628 +1,210 @@
-/**
- * PNG → SVG Vectorization Panel
- * Settings UI + live preview for the PNG-to-SVG conversion pipeline.
- */
-
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
-  Wand2,
-  Grid3X3,
-  Palette,
-  Sliders,
-  Download,
+  Loader2,
   Eye,
   EyeOff,
+  Download,
   X,
-  Loader2,
   Check,
-  ChevronDown,
   Pipette,
-  Bookmark,
-  Trash2,
-  Sparkles,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import {
-  convertPngViaServer,
-  convertPngMultiColorViaServer,
-  type ColorLayer,
-} from "@/lib/png-to-svg/convert-png-client";
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
+import { ChevronDown } from "lucide-react";
+import type { ConvertSettings } from "@/lib/png-to-svg/types";
 
-type VectorMode = "smooth" | "pixel";
 type ColorMode = "full" | "grayscale" | "bw";
 type QualityPreset = "balanced" | "high";
 
 interface PngToSvgPanelProps {
   file: File;
   imageUrl: string;
-  isApng?: boolean;
-  colorProfile?: "cmyk" | "srgb";
   onConfirm: (svg: string) => void;
-  onColorMapChange?: (colorMap: Record<number, string> | null) => void;
   onCancel: () => void;
   onDownloadSvg?: (svg: string) => void;
 }
 
 interface Settings {
-  mode: VectorMode;
-  colorCount: number;
-  fullColor: boolean;
-  lockedColors: string[];
   colorMode: ColorMode;
-  bwThreshold: number;
+  colorCount: number;
+  qualityPreset: QualityPreset;
   smoothing: number;
   speckleSize: number;
-  gridResolution: number;
-  smoothEdges: boolean;
-  qualityPreset: QualityPreset;
-}
-
-interface Preset {
-  name: string;
-  settings: Settings;
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  mode: "smooth",
-  colorCount: 16,
-  fullColor: false,
-  lockedColors: [],
   colorMode: "full",
-  bwThreshold: 50,
+  colorCount: 16,
+  qualityPreset: "balanced",
   smoothing: 60,
   speckleSize: 4,
-  gridResolution: 64,
-  smoothEdges: false,
-  qualityPreset: "balanced",
 };
-
-const HIGH_QUALITY_PRESET: Settings = {
-  ...DEFAULT_SETTINGS,
-  colorCount: 128,
-  smoothing: 30,
-  speckleSize: 2,
-  gridResolution: 128,
-};
-
-const GRID_RESOLUTIONS = [
-  { value: 16, label: "16×16" },
-  { value: 32, label: "32×32" },
-  { value: 64, label: "64×64" },
-  { value: 128, label: "128×128" },
-  { value: 256, label: "256×256" },
-  { value: 0, label: "Maximum Detail" },
-];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
-/**
- * Sample the dominant color from the original PNG at the center of each
- * SVG shape/path.  Returns a map of shape-index → hex-color that the 3D
- * engine uses to assign per-shape MeshStandardMaterial colors.
- *
- * Algorithm:
- * 1. Parse all <path> elements from the SVG string
- * 2. For each path, extract its bounding box via the `d` attribute coordinates
- * 3. Compute the center point of the bounding box
- * 4. Sample the pixel at that center from the original ImageData
- * 5. Convert to hex and store in the map
- */
-function sampleShapeColors(
-  svgString: string,
-  imageData: ImageData,
-): Record<number, string> {
-  const colorMap: Record<number, string> = {};
-  const { data, width: imgW, height: imgH } = imageData;
-
-  // Extract d="" attributes from all <path> elements
-  const pathRegex = /<path\b[^>]*d="([^"]*)"[^>]*>/gi;
-  let pathIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pathRegex.exec(svgString)) !== null) {
-    const d = match[1];
-
-    // Parse M, L, H, V commands to extract coordinate pairs
-    const coords = parsePathCoords(d);
-    if (coords.length < 2) {
-      pathIndex++;
-      continue;
-    }
-
-    // Compute bounding box of this path
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (let i = 0; i < coords.length; i += 2) {
-      const x = coords[i];
-      const y = coords[i + 1];
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-
-    // Center of the bounding box
-    const cx = Math.round((minX + maxX) / 2);
-    const cy = Math.round((minY + maxY) / 2);
-
-    // Clamp to image bounds
-    const px = Math.max(0, Math.min(imgW - 1, cx));
-    const py = Math.max(0, Math.min(imgH - 1, cy));
-
-    // Sample pixel from original PNG
-    const offset = (py * imgW + px) * 4;
-    const r = data[offset];
-    const g = data[offset + 1];
-    const b = data[offset + 2];
-    const a = data[offset + 3];
-
-    // Skip fully transparent pixels — search neighbors for a solid one
-    if (a < 30) {
-      const solid = findNearestSolidPixel(data, imgW, imgH, px, py);
-      if (solid) {
-        colorMap[pathIndex] = rgbToHex(solid[0], solid[1], solid[2]);
-      }
-    } else {
-      colorMap[pathIndex] = rgbToHex(r, g, b);
-    }
-
-    pathIndex++;
-  }
-
-  return colorMap;
-}
-
-/**
- * Inject sampled colors into a potrace SVG for accurate preview.
- * Potrace outputs black paths — this replaces each path's fill with
- * the color sampled from the original PNG at that shape's center.
- */
-function colorizeSvg(
-  svgString: string,
-  colorMap: Record<number, string>,
-): string {
-  let result = svgString;
-  let pathIndex = 0;
-
-  result = result.replace(
-    /<path\b[^>]*>/gi,
-    (match) => {
-      const color = colorMap[pathIndex];
-      pathIndex++;
-      if (!color) return match;
-      // Replace existing fill attribute or add one
-      if (/fill\s*=/i.test(match)) {
-        return match.replace(/fill\s*=\s*"[^"]*"/i, `fill="${color}"`);
-      }
-      return match.replace(/>$/, ` fill="${color}">`);
-    },
-  );
-
-  return result;
-}
-
-/** Extract x,y coordinate pairs from SVG path `d` attribute (M, L, H, V, Z). */
-function parsePathCoords(d: string): number[] {
-  const coords: number[] = [];
-  // Match commands followed by numbers
-  const tokenRegex = /([MLHVZmlhvz])\s*([-\d.,\s]*)/gi;
-  let cmd: RegExpExecArray | null;
-  let lastX = 0;
-  let lastY = 0;
-
-  while ((cmd = tokenRegex.exec(d)) !== null) {
-    const letter = cmd[1];
-    const nums = cmd[2].trim().split(/[\s,]+/).map(Number).filter((n) => !isNaN(n));
-    const upper = letter.toUpperCase();
-
-    if (upper === "M" || upper === "L") {
-      for (let i = 0; i < nums.length; i += 2) {
-        const x = letter === "m" || letter === "l" ? lastX + nums[i] : nums[i];
-        const y = letter === "m" || letter === "l" ? lastY + nums[i + 1] : nums[i + 1];
-        coords.push(x, y);
-        lastX = x;
-        lastY = y;
-      }
-    } else if (upper === "H") {
-      for (let i = 0; i < nums.length; i++) {
-        const x = letter === "h" ? lastX + nums[i] : nums[i];
-        coords.push(x, lastY);
-        lastX = x;
-      }
-    } else if (upper === "V") {
-      for (let i = 0; i < nums.length; i++) {
-        const y = letter === "v" ? lastY + nums[i] : nums[i];
-        coords.push(lastX, y);
-        lastY = y;
-      }
-    }
-    // Z/z closes path back to start — no new coords
-  }
-  return coords;
-}
-
-/** Search in a small radius for a non-transparent pixel. */
-function findNearestSolidPixel(
-  data: Uint8ClampedArray,
-  w: number,
-  h: number,
-  cx: number,
-  cy: number,
-): [number, number, number] | null {
-  for (let r = 1; r <= 5; r++) {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
-        const x = cx + dx;
-        const y = cy + dy;
-        if (x < 0 || x >= w || y < 0 || y >= h) continue;
-        const offset = (y * w + x) * 4;
-        if (data[offset + 3] >= 30) {
-          return [data[offset], data[offset + 1], data[offset + 2]];
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
-}
-
-function Section({
-  title,
-  icon: Icon,
-  children,
-  defaultOpen = true,
-}: {
-  title: string;
-  icon: React.ComponentType<{ className?: string }>;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="border-b border-white/[0.06] last:border-b-0">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center justify-between w-full py-2 px-1 text-xs font-medium text-foreground/80 hover:text-foreground transition-colors"
-        aria-expanded={open}
-      >
-        <span className="flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5" />
-          {title}
-        </span>
-        <ChevronDown
-          className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="overflow-hidden"
-          >
-            <div className="pb-3 space-y-3">{children}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
 export function PngToSvgPanel({
   file,
   imageUrl,
-  isApng = false,
-  colorProfile = "srgb",
   onConfirm,
-  onColorMapChange,
   onCancel,
   onDownloadSvg,
 }: PngToSvgPanelProps) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const [resultSvg, setResultSvg] = useState<string>("");
+  const [resultSvg, setResultSvg] = useState("");
   const [originalSize, setOriginalSize] = useState(0);
   const [svgSize, setSvgSize] = useState(0);
   const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
   const [showOriginal, setShowOriginal] = useState(false);
   const [traceError, setTraceError] = useState<string | null>(null);
-  const [presets, setPresets] = useState<Preset[]>([]);
-  const [presetName, setPresetName] = useState("");
-  const [showPresetInput, setShowPresetInput] = useState(false);
-  const [autoAnalyzed, setAutoAnalyzed] = useState(false);
-  const [imageData, setImageData] = useState<ImageData | null>(null);
-  const [sampleColor, setSampleColor] = useState<string | null>(null);
-  const [isSampling, setIsSampling] = useState(false);
-  const [similarityScore, setSimilarityScore] = useState<number | null>(null);
   const [svgValidated, setSvgValidated] = useState(false);
-  const [conversionMode, setConversionMode] = useState<"browser" | "server">("browser");
-  const [multiColor, setMultiColor] = useState(false);
-  const [colorLayers, setColorLayers] = useState<ColorLayer[]>([]);
-  // Raw potrace SVG (black paths) — used for color sampling at confirm time
-  const [rawSvg, setRawSvg] = useState<string>("");
+  const [similarityScore, setSimilarityScore] = useState<number | null>(null);
+  const [isSampling, setIsSampling] = useState(false);
 
-  const workerRef = useRef<Worker | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const imageRef = useRef<HTMLImageElement | null>(null);
-  const originalImageUrlRef = useRef<string>(imageUrl);
+  const originalImageUrlRef = useRef(imageUrl);
+  const imageDataRef = useRef<ImageData | null>(null);
 
-  // Cleanup worker on unmount
   useEffect(() => {
     return () => {
-      workerRef.current?.terminate();
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, []);
 
-  // Load image and extract ImageData
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
-      imageRef.current = img;
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      setImageData(data);
+      imageDataRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
       setOriginalSize(file.size);
-    };
-    img.onerror = () => {
-      setTraceError("Failed to decode image. The file may be corrupted or in an unsupported format.");
     };
     img.src = imageUrl;
   }, [imageUrl, file.size]);
 
-  // Auto-analyze on first load
-  useEffect(() => {
-    if (!imageData || autoAnalyzed) return;
-    setAutoAnalyzed(true);
+  const computeSimilarity = useCallback((svg: string) => {
+    const imageData = imageDataRef.current;
+    if (!imageData) return;
+    const svgImg = new Image();
+    svgImg.onload = () => {
+      const svgCanvas = document.createElement("canvas");
+      svgCanvas.width = imageData.width;
+      svgCanvas.height = imageData.height;
+      const svgCtx = svgCanvas.getContext("2d")!;
+      svgCtx.drawImage(svgImg, 0, 0, imageData.width, imageData.height);
+      const svgPixels = svgCtx.getImageData(0, 0, imageData.width, imageData.height).data;
+      const origPixels = imageData.data;
+      let totalDiff = 0;
+      let sampled = 0;
+      for (let i = 0; i < origPixels.length; i += 16) {
+        const dr = origPixels[i] - svgPixels[i];
+        const dg = origPixels[i + 1] - svgPixels[i + 1];
+        const db = origPixels[i + 2] - svgPixels[i + 2];
+        totalDiff += Math.sqrt(dr * dr + dg * dg + db * db);
+        sampled++;
+      }
+      const maxDist = 255 * Math.sqrt(3);
+      const avgDiff = sampled > 0 ? totalDiff / sampled / maxDist : 0;
+      setSimilarityScore(Math.round((1 - avgDiff) * 100));
+    };
+    svgImg.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  }, []);
 
-    // Count unique colors
-    const colors = new Set<string>();
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      if (imageData.data[i + 3] < 128) continue;
-      colors.add(`${imageData.data[i]},${imageData.data[i + 1]},${imageData.data[i + 2]}`);
-    }
-
-    // Auto-suggest settings
-    const uniqueColors = colors.size;
-    let suggested: Partial<Settings> = {};
-
-    if (uniqueColors <= 8) {
-      suggested = { colorCount: uniqueColors, fullColor: false, mode: "smooth" };
-    } else if (uniqueColors <= 32) {
-      suggested = { colorCount: Math.min(uniqueColors, 16), mode: "smooth" };
-    } else {
-      suggested = { colorCount: 32, mode: "smooth" };
-    }
-
-    setSettings((s) => ({ ...s, ...suggested }));
-  }, [imageData, autoAnalyzed]);
-
-  // Compute similarity score: render both original and SVG to canvas, compare pixels
-  const computeSimilarity = useCallback(
-    (svg: string) => {
-      if (!imageData) return;
-      const origCanvas = document.createElement("canvas");
-      origCanvas.width = imageData.width;
-      origCanvas.height = imageData.height;
-      const origCtx = origCanvas.getContext("2d")!;
-      origCtx.putImageData(imageData, 0, 0);
-
-      const svgImg = new Image();
-      svgImg.onload = () => {
-        const svgCanvas = document.createElement("canvas");
-        svgCanvas.width = imageData.width;
-        svgCanvas.height = imageData.height;
-        const svgCtx = svgCanvas.getContext("2d")!;
-        svgCtx.drawImage(svgImg, 0, 0, imageData.width, imageData.height);
-
-        const origPixels = origCtx.getImageData(0, 0, imageData.width, imageData.height).data;
-        const svgPixels = svgCtx.getImageData(0, 0, imageData.width, imageData.height).data;
-
-        let totalDiff = 0;
-        const sampleStep = 4; // sample every 4th pixel for speed
-        let sampled = 0;
-        for (let i = 0; i < origPixels.length; i += 4 * sampleStep) {
-          const dr = origPixels[i] - svgPixels[i];
-          const dg = origPixels[i + 1] - svgPixels[i + 1];
-          const db = origPixels[i + 2] - svgPixels[i + 2];
-          totalDiff += Math.sqrt(dr * dr + dg * dg + db * db);
-          sampled++;
-        }
-        // Max Euclidean distance in RGB space is sqrt(255^2*3) ≈ 441.67
-        const maxDist = 255 * Math.sqrt(3);
-        const avgDiff = sampled > 0 ? totalDiff / sampled / maxDist : 0;
-        setSimilarityScore(Math.round((1 - avgDiff) * 100));
-      };
-      svgImg.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-    },
-    [imageData]
-  );
-
-  // Validate SVG renders correctly (offscreen render check)
-  const validateSvgRender = useCallback((svg: string): Promise<boolean> => {
+  const validateSvg = useCallback((svg: string): Promise<boolean> => {
     return new Promise((resolve) => {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(svg, "image/svg+xml");
+      const parseError = doc.querySelector("parsererror");
+      if (parseError) {
+        resolve(false);
+        return;
+      }
       const img = new Image();
       img.onload = () => resolve(true);
       img.onerror = () => resolve(false);
       img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-      // Timeout fallback
       setTimeout(() => resolve(false), 5000);
     });
   }, []);
 
-  // Run vectorization in worker
-  const runVectorization = useCallback(
-    async (opts: Settings) => {
-      if (!imageData) return;
-
-      workerRef.current?.terminate();
-      setProcessing(true);
-      setProgress(0);
-      setSvgValidated(false);
-      setSimilarityScore(null);
-      setTraceError(null);
-
-      const worker = new Worker(
-        new URL("../lib/png-to-svg/worker.ts", import.meta.url),
-        { type: "module" }
-      );
-      workerRef.current = worker;
-
-      worker.onmessage = async (e) => {
-        const { svg, sizeBytes, isValid, error } = e.data;
-        worker.terminate();
-
-        if (error) {
-          setTraceError(error);
-          setResultSvg("");
-          setProcessing(false);
-          setProgress(0);
-          return;
-        }
-
-        setTraceError(null);
-        setResultSvg(svg);
-        setSvgSize(sizeBytes);
-        setProcessing(false);
-        setProgress(100);
-
-        // Validate SVG renders correctly
-        if (svg) {
-          const rendersOk = await validateSvgRender(svg);
-          setSvgValidated(rendersOk);
-          // Compute real similarity score
-          computeSimilarity(svg);
-        }
-      };
-
-      worker.onerror = (e) => {
-        setTraceError(`Vectorization failed: ${e.message || "Unknown error"}`);
-        setResultSvg("");
-        setProcessing(false);
-        setProgress(0);
-      };
-
-      worker.postMessage({
-        imageData,
-        mode: opts.mode,
-        isApng,
-        options: {
-          colorCount: opts.fullColor ? 256 : opts.colorCount,
-          fullColor: opts.fullColor,
-          lockedColors: opts.lockedColors,
-          colorMode: opts.colorMode,
-          bwThreshold: opts.bwThreshold,
-          smoothing: opts.smoothing,
-          speckleSize: opts.speckleSize,
-          gridResolution: opts.gridResolution,
-          smoothEdges: opts.smoothEdges,
-        },
-      });
-    },
-    [imageData, isApng, validateSvgRender, computeSimilarity]
-  );
-
-  // Server-side conversion via sharp + potrace (API route)
-  const runServerConversion = useCallback(async () => {
-    if (!file) return;
-
-    workerRef.current?.terminate();
+  const runConversion = useCallback(async (opts: Settings) => {
     setProcessing(true);
-    setProgress(0);
+    setTraceError(null);
+    setResultSvg("");
     setSvgValidated(false);
     setSimilarityScore(null);
-    setTraceError(null);
-    setColorLayers([]);
-    setRawSvg("");
 
     try {
-      if (multiColor) {
-        const result = await convertPngMultiColorViaServer(file);
-        setTraceError(null);
-        setColorLayers(result.layers);
-        setRawSvg(result.composite);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append(
+        "settings",
+        JSON.stringify({
+          colorMode: opts.colorMode,
+          colorCount: opts.colorCount,
+          qualityPreset: opts.qualityPreset,
+          smoothing: opts.smoothing,
+          speckleSize: opts.speckleSize,
+        } satisfies ConvertSettings),
+      );
 
-        // Build a colorized preview SVG: inject sampled colors into the
-        // composite potrace output so the preview shows the actual logo colors
-        // instead of a black silhouette.
-        let previewSvg = result.composite;
-        if (imageData) {
-          const colorMap = sampleShapeColors(result.composite, imageData);
-          if (Object.keys(colorMap).length > 0) {
-            previewSvg = colorizeSvg(result.composite, colorMap);
-          }
-        }
+      const res = await fetch("/api/convert", {
+        method: "POST",
+        body: formData,
+      });
 
-        setResultSvg(previewSvg);
-        setSvgSize(result.sizeBytes);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setTraceError(data.error || "Conversion failed");
         setProcessing(false);
-        setProgress(100);
+        return;
+      }
 
-        if (previewSvg) {
-          const rendersOk = await validateSvgRender(previewSvg);
-          setSvgValidated(rendersOk);
-          computeSimilarity(previewSvg);
-        }
-      } else {
-        const { svg, sizeBytes } = await convertPngViaServer(file);
-        setTraceError(null);
-        setResultSvg(svg);
-        setSvgSize(sizeBytes);
-        setProcessing(false);
-        setProgress(100);
+      const { svg, sizeBytes } = data;
+      setResultSvg(svg);
+      setSvgSize(sizeBytes);
+      setProcessing(false);
 
-        if (svg) {
-          const rendersOk = await validateSvgRender(svg);
-          setSvgValidated(rendersOk);
-          computeSimilarity(svg);
-        }
+      if (svg) {
+        const isValid = await validateSvg(svg);
+        setSvgValidated(isValid);
+        computeSimilarity(svg);
       }
     } catch (err) {
-      setTraceError(
-        `Server conversion failed: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-      setResultSvg("");
-      setColorLayers([]);
+      setTraceError(err instanceof Error ? err.message : "Conversion failed");
       setProcessing(false);
-      setProgress(0);
     }
-  }, [file, multiColor, validateSvgRender, computeSimilarity]);
+  }, [file, validateSvg, computeSimilarity]);
 
-  // Debounced re-trace on settings change (browser mode only)
   useEffect(() => {
-    if (!imageData || conversionMode === "server") return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      runVectorization(settings);
-    }, 250);
+      runConversion(settings);
+    }, 300);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [settings, imageData, runVectorization, conversionMode]);
+  }, [settings, runConversion]);
 
-  // Draw preview
   useEffect(() => {
     if (!previewCanvasRef.current || !resultSvg) return;
     const canvas = previewCanvasRef.current;
@@ -641,30 +223,6 @@ export function PngToSvgPanel({
     setSettings((s) => ({ ...s, [key]: value }));
   };
 
-  const applyPreset = (preset: QualityPreset) => {
-    if (preset === "high") {
-      setSettings((s) => ({ ...s, ...HIGH_QUALITY_PRESET, mode: s.mode }));
-    } else {
-      setSettings((s) => ({ ...s, ...DEFAULT_SETTINGS, mode: s.mode }));
-    }
-    updateSetting("qualityPreset", preset);
-  };
-
-  const savePreset = () => {
-    if (!presetName.trim()) return;
-    setPresets((p) => [...p, { name: presetName.trim(), settings }]);
-    setPresetName("");
-    setShowPresetInput(false);
-  };
-
-  const deletePreset = (idx: number) => {
-    setPresets((p) => p.filter((_, i) => i !== idx));
-  };
-
-  const handleEyedropper = () => {
-    setIsSampling(true);
-  };
-
   const handlePreviewClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isSampling || !previewCanvasRef.current) return;
     const canvas = previewCanvasRef.current;
@@ -676,195 +234,47 @@ export function PngToSvgPanel({
     const ctx = canvas.getContext("2d")!;
     const pixel = ctx.getImageData(x, y, 1, 1).data;
     const hex = `#${((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1)}`;
-    setSampleColor(hex);
     setIsSampling(false);
-
-    if (!settings.lockedColors.includes(hex)) {
-      updateSetting("lockedColors", [...settings.lockedColors, hex]);
-    }
   };
-
-  const removeLockedColor = (hex: string) => {
-    updateSetting(
-      "lockedColors",
-      settings.lockedColors.filter((c) => c !== hex)
-    );
-  };
-
-  // similarityScore is computed via canvas pixel comparison in computeSimilarity()
 
   return (
     <div className="space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto pr-1">
-      {/* APNG warning */}
-      {isApng && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-300">
-          Animated PNG detected — only the first frame will be vectorized.
-        </div>
-      )}
-
-      {/* CMYK color profile warning */}
-      {colorProfile === "cmyk" && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-300">
-          CMYK color profile detected — colors have been converted to sRGB. Some color accuracy may be lost.
-        </div>
-      )}
-
-      {/* Trace error */}
       {traceError && (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-300">
-          Vectorization failed: {traceError}
+          {traceError}
         </div>
       )}
 
-      {/* SVG validation status */}
       {resultSvg && !processing && (
         <div className={`rounded-lg border p-2 text-xs ${svgValidated ? "border-green-500/30 bg-green-500/10 text-green-300" : "border-red-500/30 bg-red-500/10 text-red-300"}`}>
-          {svgValidated ? "SVG validated — renders correctly" : "SVG validation failed — output may be malformed"}
+          {svgValidated ? "SVG validated" : "SVG validation failed"}
         </div>
       )}
 
-      {/* Mode selector — browser only */}
-      {conversionMode === "browser" && (
-        <div className="flex rounded-lg border border-white/[0.06] overflow-hidden">
-          <button
-            onClick={() => updateSetting("mode", "smooth")}
-            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
-              settings.mode === "smooth"
-                ? "bg-primary text-primary-foreground"
-                : "bg-background/50 text-muted-foreground hover:text-foreground"
-            }`}
-            aria-label="Smooth Trace mode"
-          >
-            <Wand2 className="h-3.5 w-3.5" />
-            Smooth Trace
-          </button>
-          <button
-            onClick={() => updateSetting("mode", "pixel")}
-            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
-              settings.mode === "pixel"
-                ? "bg-primary text-primary-foreground"
-                : "bg-background/50 text-muted-foreground hover:text-foreground"
-            }`}
-            aria-label="Pixel Grid mode"
-          >
-            <Grid3X3 className="h-3.5 w-3.5" />
-            Pixel Grid
-          </button>
-        </div>
-      )}
-
-      {/* Conversion engine selector */}
-      <div className="flex rounded-lg border border-white/[0.06] overflow-hidden">
-        <button
-          onClick={() => setConversionMode("browser")}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
-            conversionMode === "browser"
-              ? "bg-primary text-primary-foreground"
-              : "bg-background/50 text-muted-foreground hover:text-foreground"
-          }`}
-          aria-label="Browser conversion — runs locally, more settings"
+      <div className="flex gap-2">
+        <Button
+          variant={settings.qualityPreset === "balanced" ? "default" : "outline"}
+          size="sm"
+          className="flex-1 text-xs"
+          onClick={() => updateSetting("qualityPreset", "balanced")}
         >
-          Browser
-        </button>
-        <button
-          onClick={() => {
-            setConversionMode("server");
-            runServerConversion();
-          }}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
-            conversionMode === "server"
-              ? "bg-primary text-primary-foreground"
-              : "bg-background/50 text-muted-foreground hover:text-foreground"
-          }`}
-          aria-label="Server conversion — sharp + potrace, higher quality"
+          Balanced
+        </Button>
+        <Button
+          variant={settings.qualityPreset === "high" ? "default" : "outline"}
+          size="sm"
+          className="flex-1 text-xs"
+          onClick={() => updateSetting("qualityPreset", "high")}
         >
-          Server (sharp)
-        </button>
+          High Quality
+        </Button>
       </div>
 
-      {/* Multi-color extraction toggle — server mode only */}
-      {conversionMode === "server" && (
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] px-3 py-2">
-          <div className="space-y-0.5">
-            <Label className="text-xs">Multi-Color Extraction</Label>
-            <p className="text-[10px] text-muted-foreground">
-              Detect dominant colors and vectorize each layer separately
-            </p>
-          </div>
-          <Switch
-            checked={multiColor}
-            onCheckedChange={(v) => {
-              setMultiColor(v);
-              if (conversionMode === "server") runServerConversion();
-            }}
-            aria-label="Enable multi-color extraction"
-          />
-        </div>
-      )}
-
-      {/* Color swatches — multi-color results */}
-      {multiColor && colorLayers.length > 0 && (
-        <div className="rounded-lg border border-white/[0.06] p-3 space-y-2">
-          <Label className="text-xs">Detected Colors ({colorLayers.length})</Label>
-          <div className="flex flex-wrap gap-2">
-            {colorLayers.map((layer) => (
-              <Tooltip key={layer.color}>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center gap-1.5 rounded-md border border-white/[0.08] px-2 py-1">
-                    <div
-                      className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0"
-                      style={{ backgroundColor: layer.color }}
-                    />
-                    <span className="text-[10px] font-mono text-muted-foreground">
-                      {layer.color}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground/60">
-                      {layer.percentage.toFixed(0)}%
-                    </span>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {layer.color} — {layer.percentage.toFixed(1)}% of image ({layer.pixelCount.toLocaleString()} px)
-                </TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Quality preset — browser only */}
-      {conversionMode === "browser" && (
-        <div className="flex gap-2">
-          <Button
-            variant={settings.qualityPreset === "balanced" ? "default" : "outline"}
-            size="sm"
-            className="flex-1 text-xs"
-            onClick={() => applyPreset("balanced")}
-            aria-label="Balanced quality preset"
-          >
-            Balanced
-          </Button>
-          <Button
-            variant={settings.qualityPreset === "high" ? "default" : "outline"}
-            size="sm"
-            className="flex-1 text-xs"
-            onClick={() => applyPreset("high")}
-            aria-label="High quality preset — larger file, more detail"
-          >
-            <Sparkles className="h-3 w-3 mr-1" />
-            High Quality
-          </Button>
-        </div>
-      )}
-
-      {/* Preview */}
       <div className="relative rounded-lg border border-white/[0.06] overflow-hidden bg-white/5">
         <canvas
           ref={previewCanvasRef}
           className={`w-full aspect-square object-contain ${isSampling ? "cursor-crosshair" : ""}`}
           onClick={handlePreviewClick}
-          aria-label="Vectorized SVG preview"
-          role="img"
         />
         {processing && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/60 backdrop-blur-sm">
@@ -879,7 +289,6 @@ export function PngToSvgPanel({
                 size="icon"
                 className="h-7 w-7 bg-background/60 backdrop-blur-sm"
                 onClick={() => setShowOriginal(!showOriginal)}
-                aria-label={showOriginal ? "Show traced result" : "Show original image"}
               >
                 {showOriginal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               </Button>
@@ -896,169 +305,78 @@ export function PngToSvgPanel({
         )}
       </div>
 
-      {/* Eyedropper — browser only */}
-      {conversionMode === "browser" && (
-        <div className="flex items-center gap-2">
-          <Button
-            variant={isSampling ? "default" : "outline"}
-            size="sm"
-            className="text-xs"
-            onClick={handleEyedropper}
-            aria-label={isSampling ? "Click on preview to sample color" : "Activate eyedropper to lock a brand color"}
-          >
-            <Pipette className="h-3 w-3 mr-1" />
-            {isSampling ? "Click on preview..." : "Eyedropper"}
-          </Button>
-          {settings.lockedColors.length > 0 && (
-            <div className="flex gap-1 flex-wrap">
-              {settings.lockedColors.map((hex) => (
-                <div key={hex} className="flex items-center gap-1">
-                  <div
-                    className="w-4 h-4 rounded border border-white/20"
-                    style={{ backgroundColor: hex }}
-                  />
-                  <button
-                    onClick={() => removeLockedColor(hex)}
-                    className="text-muted-foreground hover:text-foreground"
-                    aria-label={`Remove locked color ${hex}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+      <div className="flex items-center gap-2">
+        <Button
+          variant={isSampling ? "default" : "outline"}
+          size="sm"
+          className="text-xs"
+          onClick={() => setIsSampling(!isSampling)}
+        >
+          <Pipette className="h-3 w-3 mr-1" />
+          {isSampling ? "Click preview..." : "Eyedropper"}
+        </Button>
+      </div>
+
+      <Collapsible defaultOpen>
+        <CollapsibleTrigger className="flex items-center justify-between w-full py-2 text-xs font-medium text-foreground/80 hover:text-foreground transition-colors">
+          <span className="flex items-center gap-2">
+            <Wand2 className="h-3.5 w-3.5" />
+            Color Mode
+          </span>
+          <ChevronDown className="h-3.5 w-3.5" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="pb-3 space-y-3">
+          <div className="flex gap-1">
+            {(["full", "grayscale", "bw"] as ColorMode[]).map((m) => (
+              <Button
+                key={m}
+                variant={settings.colorMode === m ? "default" : "outline"}
+                size="sm"
+                className="flex-1 text-xs capitalize"
+                onClick={() => updateSetting("colorMode", m)}
+              >
+                {m === "bw" ? "B&W" : m}
+              </Button>
+            ))}
+          </div>
+
+          {settings.colorMode === "full" && (
+            <div className="space-y-1">
+              <Label className="text-xs">Colors: {settings.colorCount}</Label>
+              <Slider
+                value={[settings.colorCount]}
+                onValueChange={(v) => updateSetting("colorCount", v[0])}
+                min={2}
+                max={256}
+                step={1}
+              />
             </div>
           )}
-        </div>
-      )}
 
-      {/* Settings sections — browser only */}
-      {conversionMode === "browser" && (
-        <>
-          <Section title="Colors" icon={Palette}>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Full Color</Label>
-                <Switch
-                  checked={settings.fullColor}
-                  onCheckedChange={(v) => updateSetting("fullColor", v)}
-                  aria-label="Full color mode"
-                />
-              </div>
-              {!settings.fullColor && (
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs">Colors: {settings.colorCount}</Label>
-                  </div>
-                  <Slider
-                    value={[settings.colorCount]}
-                    onValueChange={(v) => updateSetting("colorCount", v[0])}
-                    min={2}
-                    max={256}
-                    step={1}
-                    aria-label="Color count"
-                  />
-                </div>
-              )}
-              <div className="space-y-1">
-                <Label className="text-xs">Color Mode</Label>
-                <div className="flex gap-1">
-                  {(["full", "grayscale", "bw"] as ColorMode[]).map((m) => (
-                    <Button
-                      key={m}
-                      variant={settings.colorMode === m ? "default" : "outline"}
-                      size="sm"
-                      className="flex-1 text-xs capitalize"
-                      onClick={() => updateSetting("colorMode", m)}
-                      aria-label={`${m === "bw" ? "Black and white" : m} color mode`}
-                    >
-                      {m === "bw" ? "B&W" : m}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              {settings.colorMode === "bw" && (
-                <div className="space-y-1">
-                  <Label className="text-xs">Threshold: {settings.bwThreshold}%</Label>
-                  <Slider
-                    value={[settings.bwThreshold]}
-                    onValueChange={(v) => updateSetting("bwThreshold", v[0])}
-                    min={0}
-                    max={100}
-                    step={1}
-                    aria-label="Black and white threshold"
-                  />
-                </div>
-              )}
-            </div>
-          </Section>
+          <div className="space-y-1">
+            <Label className="text-xs">Sharp ↔ Smooth: {settings.smoothing}%</Label>
+            <Slider
+              value={[settings.smoothing]}
+              onValueChange={(v) => updateSetting("smoothing", v[0])}
+              min={0}
+              max={100}
+              step={1}
+            />
+          </div>
 
-          {/* Mode-specific settings */}
-          {settings.mode === "smooth" ? (
-            <Section title="Smooth Trace" icon={Wand2}>
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">
-                    Sharp ↔ Smooth: {settings.smoothing}%
-                  </Label>
-                  <Slider
-                    value={[settings.smoothing]}
-                    onValueChange={(v) => updateSetting("smoothing", v[0])}
-                    min={0}
-                    max={100}
-                    step={1}
-                    aria-label="Smoothing level"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">
-                    Min Detail Size: {settings.speckleSize}px
-                  </Label>
-                  <Slider
-                    value={[settings.speckleSize]}
-                    onValueChange={(v) => updateSetting("speckleSize", v[0])}
-                    min={0}
-                    max={20}
-                    step={1}
-                    aria-label="Minimum detail size"
-                  />
-                </div>
-              </div>
-            </Section>
-          ) : (
-            <Section title="Pixel Grid" icon={Grid3X3}>
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Grid Resolution</Label>
-                  <div className="grid grid-cols-3 gap-1">
-                    {GRID_RESOLUTIONS.map((res) => (
-                      <Button
-                        key={res.value}
-                        variant={settings.gridResolution === res.value ? "default" : "outline"}
-                        size="sm"
-                        className="text-xs"
-                        onClick={() => updateSetting("gridResolution", res.value)}
-                        aria-label={`Grid resolution ${res.label}`}
-                      >
-                        {res.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs">Smooth Edges</Label>
-                  <Switch
-                    checked={settings.smoothEdges}
-                    onCheckedChange={(v) => updateSetting("smoothEdges", v)}
-                    aria-label="Smooth edges"
-                  />
-                </div>
-              </div>
-            </Section>
-          )}
-        </>
-      )}
+          <div className="space-y-1">
+            <Label className="text-xs">Min Detail Size: {settings.speckleSize}px</Label>
+            <Slider
+              value={[settings.speckleSize]}
+              onValueChange={(v) => updateSetting("speckleSize", v[0])}
+              min={0}
+              max={20}
+              step={1}
+            />
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
 
-      {/* File size readout */}
       <div className="rounded-lg border border-white/[0.06] p-3 space-y-1">
         <div className="flex items-center justify-between text-xs">
           <span className="text-muted-foreground">Original PNG:</span>
@@ -1076,69 +394,12 @@ export function PngToSvgPanel({
         )}
       </div>
 
-      {/* Presets — browser only */}
-      {conversionMode === "browser" && (
-        <Section title="Presets" icon={Bookmark} defaultOpen={false}>
-          <div className="space-y-2">
-            {presets.map((p, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="flex-1 text-xs justify-start"
-                  onClick={() => setSettings(p.settings)}
-                >
-                  {p.name}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => deletePreset(i)}
-                  aria-label={`Delete preset ${p.name}`}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
-            {showPresetInput ? (
-              <div className="flex gap-1">
-                <input
-                  type="text"
-                  value={presetName}
-                  onChange={(e) => setPresetName(e.target.value)}
-                  placeholder="Preset name..."
-                  className="flex-1 rounded-md border border-input bg-background/50 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                  onKeyDown={(e) => e.key === "Enter" && savePreset()}
-                  autoFocus
-                />
-                <Button size="sm" onClick={savePreset}>
-                  <Check className="h-3 w-3" />
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs w-full"
-                onClick={() => setShowPresetInput(true)}
-                aria-label="Save current settings as a named preset"
-              >
-                Save Current Settings
-              </Button>
-            )}
-          </div>
-        </Section>
-      )}
-
-      {/* Actions */}
       <div className="flex gap-2">
         <Button
           variant="outline"
           size="sm"
           className="flex-1 text-xs"
           onClick={onCancel}
-          aria-label="Cancel vectorization and close panel"
         >
           Cancel
         </Button>
@@ -1148,7 +409,6 @@ export function PngToSvgPanel({
             size="sm"
             className="text-xs"
             onClick={() => onDownloadSvg(resultSvg)}
-            aria-label="Download SVG file"
           >
             <Download className="h-3.5 w-3.5 mr-1" />
             SVG
@@ -1157,19 +417,8 @@ export function PngToSvgPanel({
         <Button
           size="sm"
           className="flex-1 text-xs"
-          onClick={() => {
-            if (imageData) {
-              // Sample colors from the RAW potrace SVG (black paths),
-              // not the colorized preview — the engine needs the raw
-              // path coordinates to compute bounding box centers.
-              const svgForSampling = multiColor && rawSvg ? rawSvg : resultSvg;
-              const colorMap = sampleShapeColors(svgForSampling, imageData);
-              onColorMapChange?.(Object.keys(colorMap).length > 0 ? colorMap : null);
-            }
-            onConfirm(resultSvg);
-          }}
+          onClick={() => onConfirm(resultSvg)}
           disabled={!resultSvg || processing}
-          aria-label="Send vectorized SVG to the 3D editor"
         >
           <Check className="h-3.5 w-3.5 mr-1" />
           Continue to 3D

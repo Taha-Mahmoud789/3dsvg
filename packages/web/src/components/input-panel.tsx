@@ -106,8 +106,6 @@ interface InputPanelProps {
   customSvg: string;
   onCustomSvgChange: (v: string) => void;
   onFileSvgChange: (svg: string) => void;
-  onColorMapChange?: (colorMap: Record<number, string> | null) => void;
-  onPngUrlChange?: (url: string | null) => void;
   onPixelSvgChange: (svg: string) => void;
   onTextSvgChange: (svg: string) => void;
   onTextChange?: (text: string) => void;
@@ -115,8 +113,6 @@ interface InputPanelProps {
   initialText?: string;
   initialFont?: string;
   droppedFile?: { name: string; content: string } | null;
-  droppedRasterFile?: File | null;
-  onRasterFileChange?: (file: File | null) => void;
 }
 
 const tabs = [
@@ -138,8 +134,6 @@ export function InputPanel({
   customSvg,
   onCustomSvgChange,
   onFileSvgChange,
-  onColorMapChange,
-  onPngUrlChange,
   onPixelSvgChange,
   onTextSvgChange,
   onTextChange,
@@ -147,8 +141,6 @@ export function InputPanel({
   initialText,
   initialFont,
   droppedFile,
-  droppedRasterFile,
-  onRasterFileChange,
 }: InputPanelProps) {
   const [expanded, setExpanded] = useState(true);
 
@@ -161,8 +153,6 @@ export function InputPanel({
   const [rasterFile, setRasterFile] = useState<File | null>(null);
   const [rasterImageUrl, setRasterImageUrl] = useState<string | null>(null);
   const [rasterError, setRasterError] = useState<string | null>(null);
-  const [isApng, setIsApng] = useState(false);
-  const [colorProfile, setColorProfile] = useState<"cmyk" | "srgb">("srgb");
   const svgFileInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -176,14 +166,6 @@ export function InputPanel({
       setExpanded(true);
     }
   }, [droppedFile]);
-
-  // Sync dropped raster file from parent
-  useEffect(() => {
-    if (droppedRasterFile) {
-      handleRasterUpload(droppedRasterFile);
-      setExpanded(true);
-    }
-  }, [droppedRasterFile]);
 
   // Render the uploaded SVG preview as an inert image. Encoding the markup as a
   // data URL and rendering it via <img> means the browser treats it as a static
@@ -232,14 +214,6 @@ export function InputPanel({
       return;
     }
 
-    // Detect APNG (animated PNG) — extract first frame only
-    const apngDetected = detectApng(buffer);
-    setIsApng(apngDetected);
-
-    // Detect CMYK color profile
-    const profile = detectColorProfile(buffer);
-    setColorProfile(profile);
-
     const url = URL.createObjectURL(file);
     setRasterFile(file);
     setRasterImageUrl(url);
@@ -251,7 +225,6 @@ export function InputPanel({
 
     if (isRasterFile(file)) {
       handleRasterUpload(file);
-      onRasterFileChange?.(file);
     } else {
       // Validate it looks like SVG before accepting
       const reader = new FileReader();
@@ -270,39 +243,20 @@ export function InputPanel({
     }
   };
 
-  const handleRasterConfirm = (svg: string) => {
-    if (onPngUrlChange && rasterImageUrl) {
-      // Displacement path: pass the PNG object URL to the page
-      onPngUrlChange(rasterImageUrl);
-    } else {
-      // Legacy SVG path: pass the vectorized SVG string
-      onFileSvgChange(svg);
-    }
+  const handleRasterConfirm = () => {
     setRasterFile(null);
-    // Do NOT revoke the URL here — the page owns it for displacement rendering
+    setRasterImageUrl(null);
   };
 
   const handleRasterCancel = () => {
     setRasterFile(null);
     setUploadedFileName(null);
     setRasterError(null);
-    setIsApng(false);
     if (rasterImageUrl) {
       URL.revokeObjectURL(rasterImageUrl);
       setRasterImageUrl(null);
     }
-    onRasterFileChange?.(null);
     if (svgFileInputRef.current) svgFileInputRef.current.value = "";
-  };
-
-  const handleRasterDownload = (svg: string) => {
-    const blob = new Blob([svg], { type: "image/svg+xml" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = (uploadedFileName?.replace(/\.[^.]+$/, "") || "vectorized") + ".svg";
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -374,12 +328,11 @@ export function InputPanel({
                 <PngToSvgPanel
                   file={rasterFile}
                   imageUrl={rasterImageUrl}
-                  isApng={isApng}
-                  colorProfile={colorProfile}
-                  onConfirm={handleRasterConfirm}
-                  onColorMapChange={onColorMapChange}
+                  onConfirm={() => {
+                    setRasterFile(null);
+                    setRasterImageUrl(null);
+                  }}
                   onCancel={handleRasterCancel}
-                  onDownloadSvg={handleRasterDownload}
                 />
               ) : uploadedFileName ? (
                 <div className="space-y-3">
@@ -403,7 +356,6 @@ export function InputPanel({
                         setRasterFile(null);
                         setRasterError(null);
                         onFileSvgChange("");
-                        onRasterFileChange?.(null);
                         if (svgFileInputRef.current) svgFileInputRef.current.value = "";
                       }}
                       className="shrink-0 p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
