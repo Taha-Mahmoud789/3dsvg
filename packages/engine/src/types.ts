@@ -34,6 +34,14 @@ export interface SVG3DProps {
   depth?: number; // default 1
   smoothness?: number; // default 0.2
   color?: string; // default "#ffffff"
+  /**
+   * Optional per-shape color map from PNG color sampling.
+   * Keys are shape indices (0-based, matching the order SVGLoader produces
+   * paths from the SVG), values are hex color strings (e.g. "#ff0000").
+   * When provided, each shape gets its own MeshStandardMaterial with the
+   * corresponding color instead of sharing the single `color` prop.
+   */
+  colorMap?: Record<number, string> | null;
 
   // Material
   material?: MaterialPreset;
@@ -104,6 +112,7 @@ export const defaultProps: Required<
     | "depth"
     | "smoothness"
     | "color"
+    | "colorMap"
     | "material"
     | "metalness"
     | "roughness"
@@ -139,6 +148,7 @@ export const defaultProps: Required<
   depth: 1,
   smoothness: 0.2,
   color: "#ffffff",
+  colorMap: null,
   material: "default",
   metalness: 0.15,
   roughness: 0.35,

@@ -8,6 +8,7 @@ export default defineConfig({
     "src/materials.ts",
     "src/types.ts",
     "src/use-font.ts",
+    "src/png-to-3d.tsx",
   ],
   format: ["esm"],
   dts: true,

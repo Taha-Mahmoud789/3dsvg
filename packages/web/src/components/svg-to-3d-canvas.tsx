@@ -310,6 +310,7 @@ interface SVGTo3DCanvasProps {
   depth: number;
   smoothness: number;
   color: string;
+  colorMap?: Record<number, string> | null;
   bgColor: string;
   textureUrl: string | null;
   textureSettings: TextureSettings;
@@ -337,6 +338,7 @@ export function SVGTo3DCanvas({
   depth,
   smoothness,
   color,
+  colorMap,
   bgColor,
   textureUrl,
   textureSettings,
@@ -395,6 +397,7 @@ export function SVGTo3DCanvas({
       depth={depth}
       smoothness={smoothness}
       color={color}
+      colorMap={colorMap}
       material={materialSettings.preset}
       metalness={materialSettings.metalness}
       roughness={materialSettings.roughness}

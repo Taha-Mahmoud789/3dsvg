@@ -53,6 +53,7 @@ export function SVG3D(props: SVG3DProps) {
     depth = defaultProps.depth,
     smoothness = defaultProps.smoothness,
     color = defaultProps.color,
+    colorMap = defaultProps.colorMap,
     material = defaultProps.material,
     metalness,
     roughness,
@@ -146,6 +147,7 @@ export function SVG3D(props: SVG3DProps) {
           depth={depth}
           smoothness={smoothness}
           color={color}
+          colorMap={colorMap}
           materialSettings={materialSettings}
           rotationX={rotationX}
           rotationY={rotationY}
@@ -222,3 +224,7 @@ export type { MaterialSettings } from "./materials";
 
 // Font utilities
 export { useFont, textToSvg } from "./use-font";
+
+// PNG → 3D displacement mesh
+export { PngTo3D, buildPngDisplacementMesh } from "./png-to-3d";
+export type { PngTo3DProps } from "./png-to-3d";

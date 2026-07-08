@@ -106,6 +106,8 @@ interface InputPanelProps {
   customSvg: string;
   onCustomSvgChange: (v: string) => void;
   onFileSvgChange: (svg: string) => void;
+  onColorMapChange?: (colorMap: Record<number, string> | null) => void;
+  onPngUrlChange?: (url: string | null) => void;
   onPixelSvgChange: (svg: string) => void;
   onTextSvgChange: (svg: string) => void;
   onTextChange?: (text: string) => void;
@@ -136,6 +138,8 @@ export function InputPanel({
   customSvg,
   onCustomSvgChange,
   onFileSvgChange,
+  onColorMapChange,
+  onPngUrlChange,
   onPixelSvgChange,
   onTextSvgChange,
   onTextChange,
@@ -267,12 +271,15 @@ export function InputPanel({
   };
 
   const handleRasterConfirm = (svg: string) => {
-    onFileSvgChange(svg);
-    setRasterFile(null);
-    if (rasterImageUrl) {
-      URL.revokeObjectURL(rasterImageUrl);
-      setRasterImageUrl(null);
+    if (onPngUrlChange && rasterImageUrl) {
+      // Displacement path: pass the PNG object URL to the page
+      onPngUrlChange(rasterImageUrl);
+    } else {
+      // Legacy SVG path: pass the vectorized SVG string
+      onFileSvgChange(svg);
     }
+    setRasterFile(null);
+    // Do NOT revoke the URL here — the page owns it for displacement rendering
   };
 
   const handleRasterCancel = () => {
@@ -370,6 +377,7 @@ export function InputPanel({
                   isApng={isApng}
                   colorProfile={colorProfile}
                   onConfirm={handleRasterConfirm}
+                  onColorMapChange={onColorMapChange}
                   onCancel={handleRasterCancel}
                   onDownloadSvg={handleRasterDownload}
                 />

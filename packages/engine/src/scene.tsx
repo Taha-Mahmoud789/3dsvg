@@ -44,6 +44,7 @@ export interface ExtrudedSVGProps {
   depth: number;
   smoothness: number;
   color: string;
+  colorMap?: Record<number, string> | null;
   materialSettings: MaterialSettings;
   rotationX: number;
   rotationY: number;
@@ -334,6 +335,7 @@ export function ExtrudedSVG({
   depth,
   smoothness,
   color,
+  colorMap,
   materialSettings,
   rotationX,
   rotationY,
@@ -389,8 +391,11 @@ export function ExtrudedSVG({
         const isGold = materialSettings.preset === "gold";
         const isEmissive = materialSettings.preset === "emissive";
         const wantsTransparency = materialSettings.transparent || materialSettings.opacity < 1;
-        const baseColor = texture ? "#ffffff" : isGold ? "#d4a017" : color;
-        const emissiveColor = isEmissive ? color : "#000000";
+
+        // Per-shape color from PNG sampling, or fall back to the single color prop
+        const shapeColor = colorMap?.[i] ?? color;
+        const baseColor = texture ? "#ffffff" : isGold ? "#d4a017" : shapeColor;
+        const emissiveColor = isEmissive ? shapeColor : "#000000";
         const emissiveIntensity = preset.emissiveIntensity ?? 0;
         const transmissionAmount = wantsTransparency ? (1 - materialSettings.opacity) : 0;
 
@@ -455,6 +460,7 @@ export interface SVG3DSceneProps {
   depth: number;
   smoothness: number;
   color: string;
+  colorMap?: Record<number, string> | null;
   materialSettings: MaterialSettings;
   rotationX: number;
   rotationY: number;
@@ -495,6 +501,7 @@ export function SVG3DScene({
   depth,
   smoothness,
   color,
+  colorMap,
   materialSettings,
   rotationX,
   rotationY,
@@ -603,6 +610,7 @@ export function SVG3DScene({
           depth={depth}
           smoothness={smoothness}
           color={color}
+          colorMap={colorMap}
           materialSettings={materialSettings}
           rotationX={rotationX}
           rotationY={rotationY}

@@ -29,6 +29,11 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import {
+  convertPngViaServer,
+  convertPngMultiColorViaServer,
+  type ColorLayer,
+} from "@/lib/png-to-svg/convert-png-client";
 
 type VectorMode = "smooth" | "pixel";
 type ColorMode = "full" | "grayscale" | "bw";
@@ -40,6 +45,7 @@ interface PngToSvgPanelProps {
   isApng?: boolean;
   colorProfile?: "cmyk" | "srgb";
   onConfirm: (svg: string) => void;
+  onColorMapChange?: (colorMap: Record<number, string> | null) => void;
   onCancel: () => void;
   onDownloadSvg?: (svg: string) => void;
 }
@@ -99,6 +105,180 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
+/**
+ * Sample the dominant color from the original PNG at the center of each
+ * SVG shape/path.  Returns a map of shape-index → hex-color that the 3D
+ * engine uses to assign per-shape MeshStandardMaterial colors.
+ *
+ * Algorithm:
+ * 1. Parse all <path> elements from the SVG string
+ * 2. For each path, extract its bounding box via the `d` attribute coordinates
+ * 3. Compute the center point of the bounding box
+ * 4. Sample the pixel at that center from the original ImageData
+ * 5. Convert to hex and store in the map
+ */
+function sampleShapeColors(
+  svgString: string,
+  imageData: ImageData,
+): Record<number, string> {
+  const colorMap: Record<number, string> = {};
+  const { data, width: imgW, height: imgH } = imageData;
+
+  // Extract d="" attributes from all <path> elements
+  const pathRegex = /<path\b[^>]*d="([^"]*)"[^>]*>/gi;
+  let pathIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pathRegex.exec(svgString)) !== null) {
+    const d = match[1];
+
+    // Parse M, L, H, V commands to extract coordinate pairs
+    const coords = parsePathCoords(d);
+    if (coords.length < 2) {
+      pathIndex++;
+      continue;
+    }
+
+    // Compute bounding box of this path
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < coords.length; i += 2) {
+      const x = coords[i];
+      const y = coords[i + 1];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+
+    // Center of the bounding box
+    const cx = Math.round((minX + maxX) / 2);
+    const cy = Math.round((minY + maxY) / 2);
+
+    // Clamp to image bounds
+    const px = Math.max(0, Math.min(imgW - 1, cx));
+    const py = Math.max(0, Math.min(imgH - 1, cy));
+
+    // Sample pixel from original PNG
+    const offset = (py * imgW + px) * 4;
+    const r = data[offset];
+    const g = data[offset + 1];
+    const b = data[offset + 2];
+    const a = data[offset + 3];
+
+    // Skip fully transparent pixels — search neighbors for a solid one
+    if (a < 30) {
+      const solid = findNearestSolidPixel(data, imgW, imgH, px, py);
+      if (solid) {
+        colorMap[pathIndex] = rgbToHex(solid[0], solid[1], solid[2]);
+      }
+    } else {
+      colorMap[pathIndex] = rgbToHex(r, g, b);
+    }
+
+    pathIndex++;
+  }
+
+  return colorMap;
+}
+
+/**
+ * Inject sampled colors into a potrace SVG for accurate preview.
+ * Potrace outputs black paths — this replaces each path's fill with
+ * the color sampled from the original PNG at that shape's center.
+ */
+function colorizeSvg(
+  svgString: string,
+  colorMap: Record<number, string>,
+): string {
+  let result = svgString;
+  let pathIndex = 0;
+
+  result = result.replace(
+    /<path\b[^>]*>/gi,
+    (match) => {
+      const color = colorMap[pathIndex];
+      pathIndex++;
+      if (!color) return match;
+      // Replace existing fill attribute or add one
+      if (/fill\s*=/i.test(match)) {
+        return match.replace(/fill\s*=\s*"[^"]*"/i, `fill="${color}"`);
+      }
+      return match.replace(/>$/, ` fill="${color}">`);
+    },
+  );
+
+  return result;
+}
+
+/** Extract x,y coordinate pairs from SVG path `d` attribute (M, L, H, V, Z). */
+function parsePathCoords(d: string): number[] {
+  const coords: number[] = [];
+  // Match commands followed by numbers
+  const tokenRegex = /([MLHVZmlhvz])\s*([-\d.,\s]*)/gi;
+  let cmd: RegExpExecArray | null;
+  let lastX = 0;
+  let lastY = 0;
+
+  while ((cmd = tokenRegex.exec(d)) !== null) {
+    const letter = cmd[1];
+    const nums = cmd[2].trim().split(/[\s,]+/).map(Number).filter((n) => !isNaN(n));
+    const upper = letter.toUpperCase();
+
+    if (upper === "M" || upper === "L") {
+      for (let i = 0; i < nums.length; i += 2) {
+        const x = letter === "m" || letter === "l" ? lastX + nums[i] : nums[i];
+        const y = letter === "m" || letter === "l" ? lastY + nums[i + 1] : nums[i + 1];
+        coords.push(x, y);
+        lastX = x;
+        lastY = y;
+      }
+    } else if (upper === "H") {
+      for (let i = 0; i < nums.length; i++) {
+        const x = letter === "h" ? lastX + nums[i] : nums[i];
+        coords.push(x, lastY);
+        lastX = x;
+      }
+    } else if (upper === "V") {
+      for (let i = 0; i < nums.length; i++) {
+        const y = letter === "v" ? lastY + nums[i] : nums[i];
+        coords.push(lastX, y);
+        lastY = y;
+      }
+    }
+    // Z/z closes path back to start — no new coords
+  }
+  return coords;
+}
+
+/** Search in a small radius for a non-transparent pixel. */
+function findNearestSolidPixel(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  cx: number,
+  cy: number,
+): [number, number, number] | null {
+  for (let r = 1; r <= 5; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (x < 0 || x >= w || y < 0 || y >= h) continue;
+        const offset = (y * w + x) * 4;
+        if (data[offset + 3] >= 30) {
+          return [data[offset], data[offset + 1], data[offset + 2]];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
 function Section({
   title,
   icon: Icon,
@@ -149,6 +329,7 @@ export function PngToSvgPanel({
   isApng = false,
   colorProfile = "srgb",
   onConfirm,
+  onColorMapChange,
   onCancel,
   onDownloadSvg,
 }: PngToSvgPanelProps) {
@@ -169,6 +350,11 @@ export function PngToSvgPanel({
   const [isSampling, setIsSampling] = useState(false);
   const [similarityScore, setSimilarityScore] = useState<number | null>(null);
   const [svgValidated, setSvgValidated] = useState(false);
+  const [conversionMode, setConversionMode] = useState<"browser" | "server">("browser");
+  const [multiColor, setMultiColor] = useState(false);
+  const [colorLayers, setColorLayers] = useState<ColorLayer[]>([]);
+  // Raw potrace SVG (black paths) — used for color sampling at confirm time
+  const [rawSvg, setRawSvg] = useState<string>("");
 
   const workerRef = useRef<Worker | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -358,9 +544,75 @@ export function PngToSvgPanel({
     [imageData, isApng, validateSvgRender, computeSimilarity]
   );
 
-  // Debounced re-trace on settings change
+  // Server-side conversion via sharp + potrace (API route)
+  const runServerConversion = useCallback(async () => {
+    if (!file) return;
+
+    workerRef.current?.terminate();
+    setProcessing(true);
+    setProgress(0);
+    setSvgValidated(false);
+    setSimilarityScore(null);
+    setTraceError(null);
+    setColorLayers([]);
+    setRawSvg("");
+
+    try {
+      if (multiColor) {
+        const result = await convertPngMultiColorViaServer(file);
+        setTraceError(null);
+        setColorLayers(result.layers);
+        setRawSvg(result.composite);
+
+        // Build a colorized preview SVG: inject sampled colors into the
+        // composite potrace output so the preview shows the actual logo colors
+        // instead of a black silhouette.
+        let previewSvg = result.composite;
+        if (imageData) {
+          const colorMap = sampleShapeColors(result.composite, imageData);
+          if (Object.keys(colorMap).length > 0) {
+            previewSvg = colorizeSvg(result.composite, colorMap);
+          }
+        }
+
+        setResultSvg(previewSvg);
+        setSvgSize(result.sizeBytes);
+        setProcessing(false);
+        setProgress(100);
+
+        if (previewSvg) {
+          const rendersOk = await validateSvgRender(previewSvg);
+          setSvgValidated(rendersOk);
+          computeSimilarity(previewSvg);
+        }
+      } else {
+        const { svg, sizeBytes } = await convertPngViaServer(file);
+        setTraceError(null);
+        setResultSvg(svg);
+        setSvgSize(sizeBytes);
+        setProcessing(false);
+        setProgress(100);
+
+        if (svg) {
+          const rendersOk = await validateSvgRender(svg);
+          setSvgValidated(rendersOk);
+          computeSimilarity(svg);
+        }
+      }
+    } catch (err) {
+      setTraceError(
+        `Server conversion failed: ${err instanceof Error ? err.message : "Unknown error"}`
+      );
+      setResultSvg("");
+      setColorLayers([]);
+      setProcessing(false);
+      setProgress(0);
+    }
+  }, [file, multiColor, validateSvgRender, computeSimilarity]);
+
+  // Debounced re-trace on settings change (browser mode only)
   useEffect(() => {
-    if (!imageData) return;
+    if (!imageData || conversionMode === "server") return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       runVectorization(settings);
@@ -368,7 +620,7 @@ export function PngToSvgPanel({
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [settings, imageData, runVectorization]);
+  }, [settings, imageData, runVectorization, conversionMode]);
 
   // Draw preview
   useEffect(() => {
@@ -471,56 +723,139 @@ export function PngToSvgPanel({
         </div>
       )}
 
-      {/* Mode selector */}
+      {/* Mode selector — browser only */}
+      {conversionMode === "browser" && (
+        <div className="flex rounded-lg border border-white/[0.06] overflow-hidden">
+          <button
+            onClick={() => updateSetting("mode", "smooth")}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
+              settings.mode === "smooth"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background/50 text-muted-foreground hover:text-foreground"
+            }`}
+            aria-label="Smooth Trace mode"
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            Smooth Trace
+          </button>
+          <button
+            onClick={() => updateSetting("mode", "pixel")}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
+              settings.mode === "pixel"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background/50 text-muted-foreground hover:text-foreground"
+            }`}
+            aria-label="Pixel Grid mode"
+          >
+            <Grid3X3 className="h-3.5 w-3.5" />
+            Pixel Grid
+          </button>
+        </div>
+      )}
+
+      {/* Conversion engine selector */}
       <div className="flex rounded-lg border border-white/[0.06] overflow-hidden">
         <button
-          onClick={() => updateSetting("mode", "smooth")}
+          onClick={() => setConversionMode("browser")}
           className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
-            settings.mode === "smooth"
+            conversionMode === "browser"
               ? "bg-primary text-primary-foreground"
               : "bg-background/50 text-muted-foreground hover:text-foreground"
           }`}
-          aria-label="Smooth Trace mode"
+          aria-label="Browser conversion — runs locally, more settings"
         >
-          <Wand2 className="h-3.5 w-3.5" />
-          Smooth Trace
+          Browser
         </button>
         <button
-          onClick={() => updateSetting("mode", "pixel")}
+          onClick={() => {
+            setConversionMode("server");
+            runServerConversion();
+          }}
           className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium transition-colors ${
-            settings.mode === "pixel"
+            conversionMode === "server"
               ? "bg-primary text-primary-foreground"
               : "bg-background/50 text-muted-foreground hover:text-foreground"
           }`}
-          aria-label="Pixel Grid mode"
+          aria-label="Server conversion — sharp + potrace, higher quality"
         >
-          <Grid3X3 className="h-3.5 w-3.5" />
-          Pixel Grid
+          Server (sharp)
         </button>
       </div>
 
-      {/* Quality preset */}
-      <div className="flex gap-2">
-        <Button
-          variant={settings.qualityPreset === "balanced" ? "default" : "outline"}
-          size="sm"
-          className="flex-1 text-xs"
-          onClick={() => applyPreset("balanced")}
-          aria-label="Balanced quality preset"
-        >
-          Balanced
-        </Button>
-        <Button
-          variant={settings.qualityPreset === "high" ? "default" : "outline"}
-          size="sm"
-          className="flex-1 text-xs"
-          onClick={() => applyPreset("high")}
-          aria-label="High quality preset — larger file, more detail"
-        >
-          <Sparkles className="h-3 w-3 mr-1" />
-          High Quality
-        </Button>
-      </div>
+      {/* Multi-color extraction toggle — server mode only */}
+      {conversionMode === "server" && (
+        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] px-3 py-2">
+          <div className="space-y-0.5">
+            <Label className="text-xs">Multi-Color Extraction</Label>
+            <p className="text-[10px] text-muted-foreground">
+              Detect dominant colors and vectorize each layer separately
+            </p>
+          </div>
+          <Switch
+            checked={multiColor}
+            onCheckedChange={(v) => {
+              setMultiColor(v);
+              if (conversionMode === "server") runServerConversion();
+            }}
+            aria-label="Enable multi-color extraction"
+          />
+        </div>
+      )}
+
+      {/* Color swatches — multi-color results */}
+      {multiColor && colorLayers.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] p-3 space-y-2">
+          <Label className="text-xs">Detected Colors ({colorLayers.length})</Label>
+          <div className="flex flex-wrap gap-2">
+            {colorLayers.map((layer) => (
+              <Tooltip key={layer.color}>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1.5 rounded-md border border-white/[0.08] px-2 py-1">
+                    <div
+                      className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0"
+                      style={{ backgroundColor: layer.color }}
+                    />
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {layer.color}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/60">
+                      {layer.percentage.toFixed(0)}%
+                    </span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {layer.color} — {layer.percentage.toFixed(1)}% of image ({layer.pixelCount.toLocaleString()} px)
+                </TooltipContent>
+              </Tooltip>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Quality preset — browser only */}
+      {conversionMode === "browser" && (
+        <div className="flex gap-2">
+          <Button
+            variant={settings.qualityPreset === "balanced" ? "default" : "outline"}
+            size="sm"
+            className="flex-1 text-xs"
+            onClick={() => applyPreset("balanced")}
+            aria-label="Balanced quality preset"
+          >
+            Balanced
+          </Button>
+          <Button
+            variant={settings.qualityPreset === "high" ? "default" : "outline"}
+            size="sm"
+            className="flex-1 text-xs"
+            onClick={() => applyPreset("high")}
+            aria-label="High quality preset — larger file, more detail"
+          >
+            <Sparkles className="h-3 w-3 mr-1" />
+            High Quality
+          </Button>
+        </div>
+      )}
 
       {/* Preview */}
       <div className="relative rounded-lg border border-white/[0.06] overflow-hidden bg-white/5">
@@ -561,160 +896,166 @@ export function PngToSvgPanel({
         )}
       </div>
 
-      {/* Eyedropper */}
-      <div className="flex items-center gap-2">
-        <Button
-          variant={isSampling ? "default" : "outline"}
-          size="sm"
-          className="text-xs"
-          onClick={handleEyedropper}
-          aria-label={isSampling ? "Click on preview to sample color" : "Activate eyedropper to lock a brand color"}
-        >
-          <Pipette className="h-3 w-3 mr-1" />
-          {isSampling ? "Click on preview..." : "Eyedropper"}
-        </Button>
-        {settings.lockedColors.length > 0 && (
-          <div className="flex gap-1 flex-wrap">
-            {settings.lockedColors.map((hex) => (
-              <div key={hex} className="flex items-center gap-1">
-                <div
-                  className="w-4 h-4 rounded border border-white/20"
-                  style={{ backgroundColor: hex }}
-                />
-                <button
-                  onClick={() => removeLockedColor(hex)}
-                  className="text-muted-foreground hover:text-foreground"
-                  aria-label={`Remove locked color ${hex}`}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Settings sections */}
-      <Section title="Colors" icon={Palette}>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs">Full Color</Label>
-            <Switch
-              checked={settings.fullColor}
-              onCheckedChange={(v) => updateSetting("fullColor", v)}
-              aria-label="Full color mode"
-            />
-          </div>
-          {!settings.fullColor && (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Colors: {settings.colorCount}</Label>
-              </div>
-              <Slider
-                value={[settings.colorCount]}
-                onValueChange={(v) => updateSetting("colorCount", v[0])}
-                min={2}
-                max={256}
-                step={1}
-                aria-label="Color count"
-              />
-            </div>
-          )}
-          <div className="space-y-1">
-            <Label className="text-xs">Color Mode</Label>
-            <div className="flex gap-1">
-              {(["full", "grayscale", "bw"] as ColorMode[]).map((m) => (
-                <Button
-                  key={m}
-                  variant={settings.colorMode === m ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1 text-xs capitalize"
-                  onClick={() => updateSetting("colorMode", m)}
-                  aria-label={`${m === "bw" ? "Black and white" : m} color mode`}
-                >
-                  {m === "bw" ? "B&W" : m}
-                </Button>
+      {/* Eyedropper — browser only */}
+      {conversionMode === "browser" && (
+        <div className="flex items-center gap-2">
+          <Button
+            variant={isSampling ? "default" : "outline"}
+            size="sm"
+            className="text-xs"
+            onClick={handleEyedropper}
+            aria-label={isSampling ? "Click on preview to sample color" : "Activate eyedropper to lock a brand color"}
+          >
+            <Pipette className="h-3 w-3 mr-1" />
+            {isSampling ? "Click on preview..." : "Eyedropper"}
+          </Button>
+          {settings.lockedColors.length > 0 && (
+            <div className="flex gap-1 flex-wrap">
+              {settings.lockedColors.map((hex) => (
+                <div key={hex} className="flex items-center gap-1">
+                  <div
+                    className="w-4 h-4 rounded border border-white/20"
+                    style={{ backgroundColor: hex }}
+                  />
+                  <button
+                    onClick={() => removeLockedColor(hex)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label={`Remove locked color ${hex}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
               ))}
-            </div>
-          </div>
-          {settings.colorMode === "bw" && (
-            <div className="space-y-1">
-              <Label className="text-xs">Threshold: {settings.bwThreshold}%</Label>
-              <Slider
-                value={[settings.bwThreshold]}
-                onValueChange={(v) => updateSetting("bwThreshold", v[0])}
-                min={0}
-                max={100}
-                step={1}
-                aria-label="Black and white threshold"
-              />
             </div>
           )}
         </div>
-      </Section>
+      )}
 
-      {/* Mode-specific settings */}
-      {settings.mode === "smooth" ? (
-        <Section title="Smooth Trace" icon={Wand2}>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs">
-                Sharp ↔ Smooth: {settings.smoothing}%
-              </Label>
-              <Slider
-                value={[settings.smoothing]}
-                onValueChange={(v) => updateSetting("smoothing", v[0])}
-                min={0}
-                max={100}
-                step={1}
-                aria-label="Smoothing level"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">
-                Min Detail Size: {settings.speckleSize}px
-              </Label>
-              <Slider
-                value={[settings.speckleSize]}
-                onValueChange={(v) => updateSetting("speckleSize", v[0])}
-                min={0}
-                max={20}
-                step={1}
-                aria-label="Minimum detail size"
-              />
-            </div>
-          </div>
-        </Section>
-      ) : (
-        <Section title="Pixel Grid" icon={Grid3X3}>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Grid Resolution</Label>
-              <div className="grid grid-cols-3 gap-1">
-                {GRID_RESOLUTIONS.map((res) => (
-                  <Button
-                    key={res.value}
-                    variant={settings.gridResolution === res.value ? "default" : "outline"}
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => updateSetting("gridResolution", res.value)}
-                    aria-label={`Grid resolution ${res.label}`}
-                  >
-                    {res.label}
-                  </Button>
-                ))}
+      {/* Settings sections — browser only */}
+      {conversionMode === "browser" && (
+        <>
+          <Section title="Colors" icon={Palette}>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Full Color</Label>
+                <Switch
+                  checked={settings.fullColor}
+                  onCheckedChange={(v) => updateSetting("fullColor", v)}
+                  aria-label="Full color mode"
+                />
               </div>
+              {!settings.fullColor && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">Colors: {settings.colorCount}</Label>
+                  </div>
+                  <Slider
+                    value={[settings.colorCount]}
+                    onValueChange={(v) => updateSetting("colorCount", v[0])}
+                    min={2}
+                    max={256}
+                    step={1}
+                    aria-label="Color count"
+                  />
+                </div>
+              )}
+              <div className="space-y-1">
+                <Label className="text-xs">Color Mode</Label>
+                <div className="flex gap-1">
+                  {(["full", "grayscale", "bw"] as ColorMode[]).map((m) => (
+                    <Button
+                      key={m}
+                      variant={settings.colorMode === m ? "default" : "outline"}
+                      size="sm"
+                      className="flex-1 text-xs capitalize"
+                      onClick={() => updateSetting("colorMode", m)}
+                      aria-label={`${m === "bw" ? "Black and white" : m} color mode`}
+                    >
+                      {m === "bw" ? "B&W" : m}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              {settings.colorMode === "bw" && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Threshold: {settings.bwThreshold}%</Label>
+                  <Slider
+                    value={[settings.bwThreshold]}
+                    onValueChange={(v) => updateSetting("bwThreshold", v[0])}
+                    min={0}
+                    max={100}
+                    step={1}
+                    aria-label="Black and white threshold"
+                  />
+                </div>
+              )}
             </div>
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Smooth Edges</Label>
-              <Switch
-                checked={settings.smoothEdges}
-                onCheckedChange={(v) => updateSetting("smoothEdges", v)}
-                aria-label="Smooth edges"
-              />
-            </div>
-          </div>
-        </Section>
+          </Section>
+
+          {/* Mode-specific settings */}
+          {settings.mode === "smooth" ? (
+            <Section title="Smooth Trace" icon={Wand2}>
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    Sharp ↔ Smooth: {settings.smoothing}%
+                  </Label>
+                  <Slider
+                    value={[settings.smoothing]}
+                    onValueChange={(v) => updateSetting("smoothing", v[0])}
+                    min={0}
+                    max={100}
+                    step={1}
+                    aria-label="Smoothing level"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    Min Detail Size: {settings.speckleSize}px
+                  </Label>
+                  <Slider
+                    value={[settings.speckleSize]}
+                    onValueChange={(v) => updateSetting("speckleSize", v[0])}
+                    min={0}
+                    max={20}
+                    step={1}
+                    aria-label="Minimum detail size"
+                  />
+                </div>
+              </div>
+            </Section>
+          ) : (
+            <Section title="Pixel Grid" icon={Grid3X3}>
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Grid Resolution</Label>
+                  <div className="grid grid-cols-3 gap-1">
+                    {GRID_RESOLUTIONS.map((res) => (
+                      <Button
+                        key={res.value}
+                        variant={settings.gridResolution === res.value ? "default" : "outline"}
+                        size="sm"
+                        className="text-xs"
+                        onClick={() => updateSetting("gridResolution", res.value)}
+                        aria-label={`Grid resolution ${res.label}`}
+                      >
+                        {res.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">Smooth Edges</Label>
+                  <Switch
+                    checked={settings.smoothEdges}
+                    onCheckedChange={(v) => updateSetting("smoothEdges", v)}
+                    aria-label="Smooth edges"
+                  />
+                </div>
+              </div>
+            </Section>
+          )}
+        </>
       )}
 
       {/* File size readout */}
@@ -735,58 +1076,60 @@ export function PngToSvgPanel({
         )}
       </div>
 
-      {/* Presets */}
-      <Section title="Presets" icon={Bookmark} defaultOpen={false}>
-        <div className="space-y-2">
-          {presets.map((p, i) => (
-            <div key={i} className="flex items-center gap-2">
+      {/* Presets — browser only */}
+      {conversionMode === "browser" && (
+        <Section title="Presets" icon={Bookmark} defaultOpen={false}>
+          <div className="space-y-2">
+            {presets.map((p, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 text-xs justify-start"
+                  onClick={() => setSettings(p.settings)}
+                >
+                  {p.name}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => deletePreset(i)}
+                  aria-label={`Delete preset ${p.name}`}
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </div>
+            ))}
+            {showPresetInput ? (
+              <div className="flex gap-1">
+                <input
+                  type="text"
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  placeholder="Preset name..."
+                  className="flex-1 rounded-md border border-input bg-background/50 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  onKeyDown={(e) => e.key === "Enter" && savePreset()}
+                  autoFocus
+                />
+                <Button size="sm" onClick={savePreset}>
+                  <Check className="h-3 w-3" />
+                </Button>
+              </div>
+            ) : (
               <Button
                 variant="outline"
                 size="sm"
-                className="flex-1 text-xs justify-start"
-                onClick={() => setSettings(p.settings)}
+                className="text-xs w-full"
+                onClick={() => setShowPresetInput(true)}
+                aria-label="Save current settings as a named preset"
               >
-                {p.name}
+                Save Current Settings
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={() => deletePreset(i)}
-                aria-label={`Delete preset ${p.name}`}
-              >
-                <Trash2 className="h-3 w-3" />
-              </Button>
-            </div>
-          ))}
-          {showPresetInput ? (
-            <div className="flex gap-1">
-              <input
-                type="text"
-                value={presetName}
-                onChange={(e) => setPresetName(e.target.value)}
-                placeholder="Preset name..."
-                className="flex-1 rounded-md border border-input bg-background/50 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                onKeyDown={(e) => e.key === "Enter" && savePreset()}
-                autoFocus
-              />
-              <Button size="sm" onClick={savePreset}>
-                <Check className="h-3 w-3" />
-              </Button>
-            </div>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs w-full"
-              onClick={() => setShowPresetInput(true)}
-              aria-label="Save current settings as a named preset"
-            >
-              Save Current Settings
-            </Button>
-          )}
-        </div>
-      </Section>
+            )}
+          </div>
+        </Section>
+      )}
 
       {/* Actions */}
       <div className="flex gap-2">
@@ -814,7 +1157,17 @@ export function PngToSvgPanel({
         <Button
           size="sm"
           className="flex-1 text-xs"
-          onClick={() => onConfirm(resultSvg)}
+          onClick={() => {
+            if (imageData) {
+              // Sample colors from the RAW potrace SVG (black paths),
+              // not the colorized preview — the engine needs the raw
+              // path coordinates to compute bounding box centers.
+              const svgForSampling = multiColor && rawSvg ? rawSvg : resultSvg;
+              const colorMap = sampleShapeColors(svgForSampling, imageData);
+              onColorMapChange?.(Object.keys(colorMap).length > 0 ? colorMap : null);
+            }
+            onConfirm(resultSvg);
+          }}
           disabled={!resultSvg || processing}
           aria-label="Send vectorized SVG to the 3D editor"
         >

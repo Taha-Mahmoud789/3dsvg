@@ -46,6 +46,17 @@ const SVGTo3DCanvas = dynamic(
   }
 );
 
+const PngTo3DCanvas = dynamic(
+  () =>
+    import("@/components/png-canvas").then((mod) => mod.PngTo3DCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-full bg-muted rounded-lg animate-pulse" />
+    ),
+  }
+);
+
 export default function Home() {
   // --- Editor state ---
   const [customSvg, setCustomSvg] = useState("");
@@ -56,6 +67,8 @@ export default function Home() {
   const [depth, setDepth] = useState(1);
   const [smoothness, setSmoothness] = useState(0.6);
   const [color, setColor] = useState("#4f46e5");
+  const [colorMap, setColorMap] = useState<Record<number, string> | null>(null);
+  const [pngUrl, setPngUrl] = useState<string | null>(null);
   const [bgColor, setBgColor] = useState("#6961ff");
   const [textureUrl, setTextureUrl] = useState<string | null>(null);
   const [textureSettings, setTextureSettings] =
@@ -204,32 +217,49 @@ export default function Home() {
     <main className="relative w-screen overflow-hidden bg-background h-[100svh]">
       {/* Layer 0: 3D Canvas */}
       <div className="absolute inset-0 z-0">
-        <SVGTo3DCanvas
-          svg={activeSvg}
-          depth={depth}
-          smoothness={smoothness}
-          color={color}
-          bgColor={bgColor}
-          textureUrl={textureUrl}
-          textureSettings={textureSettings}
-          materialSettings={materialSettings}
-          rotationX={rotationX}
-          rotationY={rotationY}
-          zoom={zoom}
-          resetKey={resetKey}
-          cursorOrbit={cursorOrbit}
-          orbitStrength={orbitStrength}
-          resetOnIdle={exportPreviewOpen ? false : resetOnIdle}
-          resetDelay={resetDelay}
-          animate={exportPreviewOpen ? "none" : animate}
-          animateSpeed={animateSpeed}
-          animateReverse={animateReverse}
-          lightSettings={lightSettings}
-          showLightHelper={controlsOpen && lightingOpen}
-          registerCapture={registerCapture}
-          registerCanvas={registerCanvas}
-          register3DExport={register3DExport}
-        />
+        {pngUrl ? (
+          <PngTo3DCanvas
+            pngUrl={pngUrl}
+            bgColor={bgColor}
+            displacementScale={depth * 5}
+            zoom={zoom}
+            cursorOrbit={cursorOrbit}
+            resetOnIdle={exportPreviewOpen ? false : resetOnIdle}
+            resetDelay={resetDelay}
+            animate={exportPreviewOpen ? "none" : (animate === "spin" ? "spin" : "none")}
+            animateSpeed={animateSpeed}
+            registerCanvas={registerCanvas}
+            register3DExport={register3DExport}
+          />
+        ) : (
+          <SVGTo3DCanvas
+            svg={activeSvg}
+            depth={depth}
+            smoothness={smoothness}
+            color={color}
+            colorMap={colorMap}
+            bgColor={bgColor}
+            textureUrl={textureUrl}
+            textureSettings={textureSettings}
+            materialSettings={materialSettings}
+            rotationX={rotationX}
+            rotationY={rotationY}
+            zoom={zoom}
+            resetKey={resetKey}
+            cursorOrbit={cursorOrbit}
+            orbitStrength={orbitStrength}
+            resetOnIdle={exportPreviewOpen ? false : resetOnIdle}
+            resetDelay={resetDelay}
+            animate={exportPreviewOpen ? "none" : animate}
+            animateSpeed={animateSpeed}
+            animateReverse={animateReverse}
+            lightSettings={lightSettings}
+            showLightHelper={controlsOpen && lightingOpen}
+            registerCapture={registerCapture}
+            registerCanvas={registerCanvas}
+            register3DExport={register3DExport}
+          />
+        )}
       </div>
 
       {/* Layer 1: Ambient overlay */}
@@ -259,10 +289,12 @@ export default function Home() {
         >
           <InputPanel
             inputTab={inputTab}
-            onInputTabChange={(tab) => { setInputTab(tab); setTopPanel("toolbar"); }}
+            onInputTabChange={(tab) => { setInputTab(tab); setTopPanel("toolbar"); setColorMap(null); setPngUrl(null); }}
             customSvg={customSvg}
             onCustomSvgChange={setCustomSvg}
             onFileSvgChange={setFileSvg}
+            onColorMapChange={setColorMap}
+            onPngUrlChange={setPngUrl}
             onPixelSvgChange={handlePixelSvgChange}
             onTextSvgChange={handleTextSvgChange}
             onTextChange={setCurrentText}
