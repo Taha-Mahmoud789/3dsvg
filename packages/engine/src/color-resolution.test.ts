@@ -150,15 +150,18 @@ function resolveSVGColors(svgString: string): string {
     return val.trim();
   }
 
-  const allElements = svgEl.querySelectorAll("*");
+  // Two-pass: compute all fills/strokes first, then apply (prevents DOM mutation
+  // during resolution from poisoning parent-walk inheritance)
+  const shapeTags = ["path", "rect", "circle", "ellipse", "polygon", "polyline", "line", "text", "g"];
+  const allElements = [...svgEl.querySelectorAll("*")];
+  const resolved: { el: Element; fill: string; stroke: string | null }[] = [];
   for (const el of allElements) {
     const tag = el.tagName.toLowerCase();
-    const isShape = ["path", "rect", "circle", "ellipse", "polygon", "polyline", "line", "text", "g"].includes(tag);
-    if (!isShape) continue;
+    if (!shapeTags.includes(tag)) continue;
+    resolved.push({ el, fill: resolveFill(el), stroke: resolveStroke(el) });
+  }
 
-    const fill = resolveFill(el);
-    const stroke = resolveStroke(el);
-
+  for (const { el, fill, stroke } of resolved) {
     if (fill && fill !== "none") {
       el.setAttribute("fill", fill);
     } else if (fill === "none") {
@@ -296,6 +299,17 @@ const SVG_DEEP_INHERITANCE = `<svg xmlns="http://www.w3.org/2000/svg" width="100
   </g>
 </svg>`;
 
+const SVG_CLASS_FILLS_IN_G = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <style>
+    .s0 { fill: #5e17eb }
+    .s1 { fill: #ffbd59 }
+  </style>
+  <g id="group">
+    <path id="purple" class="s0" d="M10 10 L40 10 L40 40 L10 40 Z"/>
+    <path id="orange" class="s1" d="M50 50 L80 50 L80 80 L50 80 Z"/>
+  </g>
+</svg>`;
+
 // ---- TESTS ----
 
 describe("resolveSVGColors", () => {
@@ -392,5 +406,12 @@ describe("resolveSVGColors", () => {
     const fills = getResolvedFills(SVG_DEEP_INHERITANCE);
     expect(fills.length).toBe(1);
     expect(fills[0].fill).toBe("#ff0000");
+  });
+
+  it("14. Class-based fills inside <g> wrapper (GeekCode regression)", () => {
+    const fills = getResolvedFills(SVG_CLASS_FILLS_IN_G);
+    expect(fills.length).toBe(2);
+    expect(fills[0].fill).toBe("#5e17eb"); // .s0 = purple
+    expect(fills[1].fill).toBe("#ffbd59"); // .s1 = orange
   });
 });

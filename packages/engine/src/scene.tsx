@@ -319,34 +319,35 @@ function resolveSVGColors(svgString: string): string {
     return val.trim();
   }
 
-  // Walk all elements in the SVG and inline resolved fill/stroke
-  const allElements = svgEl.querySelectorAll("*");
+  // Two-pass approach: first compute all fills/strokes WITHOUT modifying the DOM,
+  // then apply them. This prevents a <g> from getting a default fill attribute
+  // that would poison child resolution via parent-walk inheritance.
+  const shapeTags = ["path", "rect", "circle", "ellipse", "polygon", "polyline", "line", "text", "g"];
+  const allElements = [...svgEl.querySelectorAll("*")];
+  const resolved: { el: Element; fill: string; stroke: string | null }[] = [];
+
+  // Pass 1: resolve all fills/strokes against the unmodified DOM
   for (const el of allElements) {
     const tag = el.tagName.toLowerCase();
-    const isShape = ["path", "rect", "circle", "ellipse", "polygon", "polyline", "line", "text", "g"].includes(tag);
-    if (!isShape) continue;
+    if (!shapeTags.includes(tag)) continue;
+    resolved.push({ el, fill: resolveFill(el), stroke: resolveStroke(el) });
+  }
 
-    // Skip <g> elements themselves (they don't get rendered, they just group)
-    // but we need their fill/stroke to be inherited by children
-    const fill = resolveFill(el);
-    const stroke = resolveStroke(el);
-
-    // Inline the resolved fill on the element (unless it's "none")
+  // Pass 2: apply resolved values to the DOM
+  for (const { el, fill, stroke } of resolved) {
     if (fill && fill !== "none") {
       el.setAttribute("fill", fill);
     } else if (fill === "none") {
       el.setAttribute("fill", "none");
     }
 
-    // Inline the resolved stroke
     if (stroke) {
       el.setAttribute("stroke", stroke);
     }
 
-    // Remove inline style to avoid SVGLoader confusion (we've already extracted what matters)
+    // Remove fill/stroke from inline style to avoid SVGLoader confusion
     const inlineStyle = el.getAttribute("style");
     if (inlineStyle) {
-      // Preserve non-fill/stroke style properties
       const keptProps: string[] = [];
       const parts = inlineStyle.split(";");
       for (const part of parts) {
