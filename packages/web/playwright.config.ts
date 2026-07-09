@@ -4,10 +4,11 @@ export default defineConfig({
   testDir: "./tests",
   timeout: 120000,
   workers: 1,
-  retries: 1,
+  retries: 0,
   use: {
     baseURL: "http://localhost:3000",
     headless: true,
+    browserName: "chromium",
   },
   webServer: {
     command: "npm run dev",

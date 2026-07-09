@@ -38,6 +38,12 @@ A passing similarity score, a clean console, or "no errors thrown" is NOT suffic
 
 Synthetic test images (tiny solid-color squares, 1x1 pixels, etc.) do not exercise the same code paths as real logos and have already missed real bugs in this project (e.g. a `RangeError: Invalid array length` on a real 2000×2000 gradient logo that no synthetic fixture caught). Use the real logo files in `test-assets/logos/` as the standing regression set for the PNG-to-SVG and 3D-rendering pipelines, in addition to (not instead of) synthetic unit tests. When you encounter a new real-world logo that breaks something, add it to `test-assets/logos/` so the bug can't silently regress later.
 
+### Named regression fixtures
+
+| Fixture file | Named key | What it regression-tests |
+|---|---|---|
+| `test-assets/html5-original-wordmark.svg` | `html5-wordmark-regression` | View-dependent specular noise/shimmer on white surfaces. The white "5" on the orange shield historically exhibited pixel-level shimmering that changed with camera rotation, caused by low-res PMREM environment map. Always test this file at 3+ camera angles (front, angled, grazing) when touching materials, environment maps, lighting, or renderer settings. Playwright E2E: `packages/web/tests/html5-wordmark-regression.spec.ts` |
+
 ### Iterate until actually clean, not until a script exits 0
 
 An automation script finishing without throwing is not the same as the feature working correctly. After any automated test run, inspect the actual output (screenshots, generated files, exported 3D models) before reporting success. Fix issues found, then re-run the full test set again — not just the one case that failed — since a fix can regress something else elsewhere.
