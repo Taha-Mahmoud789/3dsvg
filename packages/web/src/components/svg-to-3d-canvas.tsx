@@ -318,10 +318,42 @@ function buildExportGroup(scene: THREE.Scene): THREE.Group {
     mesh.updateWorldMatrix(true, false);
     const geometry = mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrixWorld);
-    const material = Array.isArray(mesh.material)
-      ? mesh.material.map((m) => m.clone())
-      : mesh.material.clone();
-    group.add(new THREE.Mesh(geometry, material));
+
+    // Remove unused UV attributes to avoid GLTF UNUSED_OBJECT warnings
+    if (!geometry.attributes.uv || geometry.attributes.uv.count === 0) {
+      // UVs already absent
+    } else {
+      const hasTexture = mesh.material instanceof THREE.MeshPhysicalMaterial
+        || mesh.material instanceof THREE.MeshStandardMaterial
+        ? !!(mesh.material as THREE.MeshStandardMaterial).map
+        : false;
+      if (!hasTexture) {
+        geometry.deleteAttribute("uv");
+      }
+    }
+
+    // For GLB export, use clean MeshStandardMaterial to avoid advanced
+    // PHR extensions (transmission, clearcoat, ior) that cause color
+    // shifts in external viewers.
+    const srcMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    const srcColor = srcMat instanceof THREE.Material && "color" in srcMat
+      ? (srcMat as THREE.MeshStandardMaterial).color
+      : new THREE.Color("#ffffff");
+    const srcMetalness = srcMat instanceof THREE.Material && "metalness" in srcMat
+      ? (srcMat as THREE.MeshStandardMaterial).metalness
+      : 0;
+    const srcRoughness = srcMat instanceof THREE.Material && "roughness" in srcMat
+      ? (srcMat as THREE.MeshStandardMaterial).roughness
+      : 0.5;
+
+    const exportMat = new THREE.MeshStandardMaterial({
+      color: srcColor,
+      metalness: srcMetalness,
+      roughness: srcRoughness,
+      side: THREE.DoubleSide,
+    });
+
+    group.add(new THREE.Mesh(geometry, exportMat));
   }
   return group;
 }

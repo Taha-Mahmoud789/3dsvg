@@ -33,6 +33,7 @@ import {
   type IntroAnimationProps,
   type AnimationType,
 } from "./controls";
+import { unionByColor } from "./polygon-union";
 
 // ---------------------------------------------------------------------------
 // ExtrudedSVG
@@ -229,7 +230,7 @@ function resolveSVGColors(svgString: string): string {
   function resolveFill(el: Element): string {
     let current: Element | null = el;
 
-    while (current && current !== svgEl) {
+    while (current) {
       // Check inline style attribute first (highest priority)
       const inlineStyle = current.getAttribute("style");
       if (inlineStyle) {
@@ -267,7 +268,7 @@ function resolveSVGColors(svgString: string): string {
   function resolveStroke(el: Element): string | null {
     let current: Element | null = el;
 
-    while (current && current !== svgEl) {
+    while (current) {
       const inlineStyle = current.getAttribute("style");
       if (inlineStyle) {
         const strokeMatch = inlineStyle.match(/(?:^|;\s*)stroke\s*:\s*([^;]+)/i);
@@ -381,7 +382,7 @@ interface ShapeWithFill {
   fill: string;
 }
 
-function parseShapesFromSVG(svgString: string): ShapeWithFill[] {
+async function parseShapesFromSVG(svgString: string): Promise<ShapeWithFill[]> {
   const loader = new SVGLoader();
 
   // Resolve all CSS colors into inline attributes before SVGLoader parses
@@ -539,7 +540,8 @@ function parseShapesFromSVG(svgString: string): ShapeWithFill[] {
     }
   });
 
-  return allShapes;
+  // Boolean-union shapes of the same color to eliminate internal contour lines
+  return unionByColor(allShapes);
 }
 
 export function useExtrudedGeometry(
@@ -578,7 +580,7 @@ export function useExtrudedGeometry(
 
     (async () => {
       // Step 1: Parse shapes with fill colors (fast, synchronous)
-      const allShapes = parseShapesFromSVG(svgString);
+      const allShapes = await parseShapesFromSVG(svgString);
 
       if (allShapes.length === 0 || cancelRef.current || version !== versionRef.current) {
         setResult(EMPTY_RESULT);
