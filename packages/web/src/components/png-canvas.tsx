@@ -17,6 +17,7 @@ import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { ContactShadows, Environment, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 import { PngTo3D } from "3dsvg";
 import type { PngTo3DProps } from "3dsvg";
@@ -52,13 +53,37 @@ function collectExportableMeshes(scene: THREE.Scene): THREE.Mesh[] {
 function buildExportGroup(scene: THREE.Scene): THREE.Group {
   const group = new THREE.Group();
   const meshes = collectExportableMeshes(scene);
+
+  // Group meshes by color for geometry merging
+  const colorKey = (c: THREE.Color) =>
+    `${c.r.toFixed(4)},${c.g.toFixed(4)},${c.b.toFixed(4)}`;
+  const byColor = new Map<string, { geometries: THREE.BufferGeometry[]; material: THREE.MeshStandardMaterial }>();
+
   for (const mesh of meshes) {
     mesh.updateWorldMatrix(true, false);
     const geometry = mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrixWorld);
-    const material = (mesh.material as THREE.MeshStandardMaterial).clone();
-    group.add(new THREE.Mesh(geometry, material));
+    const srcMat = (mesh.material as THREE.MeshStandardMaterial).clone();
+    const key = colorKey(srcMat.color);
+
+    if (!byColor.has(key)) {
+      byColor.set(key, { geometries: [], material: srcMat });
+    }
+    byColor.get(key)!.geometries.push(geometry);
   }
+
+  for (const { geometries, material } of byColor.values()) {
+    let merged: THREE.BufferGeometry;
+    if (geometries.length === 1) {
+      merged = geometries[0];
+    } else {
+      const result = mergeGeometries(geometries, false);
+      if (!result) continue;
+      merged = result;
+    }
+    group.add(new THREE.Mesh(merged, material));
+  }
+
   return group;
 }
 

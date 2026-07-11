@@ -16,6 +16,7 @@ import * as THREE from "three";
 import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { PLYExporter } from "three/examples/jsm/exporters/PLYExporter.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 import { SVG3D, materialPresets } from "3dsvg";
 import type { AnimationType, MaterialSettings } from "3dsvg";
@@ -311,18 +312,25 @@ function collectExtrudedMeshes(scene: THREE.Scene): THREE.Mesh[] {
 // Build a detached group containing cloned meshes with world transforms baked
 // into the geometry. Ensures exports look like what the user sees, regardless
 // of camera/animation state.
+//
+// Meshes sharing the same fill color are merged into a single BufferGeometry to
+// reduce GLTF accessor/buffer overhead and shrink the final GLB file size.
 function buildExportGroup(scene: THREE.Scene): THREE.Group {
   const group = new THREE.Group();
   const meshes = collectExtrudedMeshes(scene);
+
+  // Extract per-mesh export data and group by color
+  const colorKey = (c: THREE.Color) =>
+    `${c.r.toFixed(4)},${c.g.toFixed(4)},${c.b.toFixed(4)}`;
+  const byColor = new Map<string, { geometries: THREE.BufferGeometry[]; color: THREE.Color; metalness: number; roughness: number }>();
+
   for (const mesh of meshes) {
     mesh.updateWorldMatrix(true, false);
     const geometry = mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrixWorld);
 
     // Remove unused UV attributes to avoid GLTF UNUSED_OBJECT warnings
-    if (!geometry.attributes.uv || geometry.attributes.uv.count === 0) {
-      // UVs already absent
-    } else {
+    if (geometry.attributes.uv && geometry.attributes.uv.count > 0) {
       const hasTexture = mesh.material instanceof THREE.MeshPhysicalMaterial
         || mesh.material instanceof THREE.MeshStandardMaterial
         ? !!(mesh.material as THREE.MeshStandardMaterial).map
@@ -332,12 +340,10 @@ function buildExportGroup(scene: THREE.Scene): THREE.Group {
       }
     }
 
-    // For GLB export, use clean MeshStandardMaterial to avoid advanced
-    // PHR extensions (transmission, clearcoat, ior) that cause color
-    // shifts in external viewers.
+    // Extract source color/material properties
     const srcMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
     const srcColor = srcMat instanceof THREE.Material && "color" in srcMat
-      ? (srcMat as THREE.MeshStandardMaterial).color
+      ? (srcMat as THREE.MeshStandardMaterial).color.clone()
       : new THREE.Color("#ffffff");
     const srcMetalness = srcMat instanceof THREE.Material && "metalness" in srcMat
       ? (srcMat as THREE.MeshStandardMaterial).metalness
@@ -346,15 +352,34 @@ function buildExportGroup(scene: THREE.Scene): THREE.Group {
       ? (srcMat as THREE.MeshStandardMaterial).roughness
       : 0.5;
 
+    const key = colorKey(srcColor);
+    if (!byColor.has(key)) {
+      byColor.set(key, { geometries: [], color: srcColor, metalness: srcMetalness, roughness: srcRoughness });
+    }
+    byColor.get(key)!.geometries.push(geometry);
+  }
+
+  // Merge geometries per color group and create one mesh per unique color
+  for (const { geometries, color, metalness, roughness } of byColor.values()) {
+    let merged: THREE.BufferGeometry;
+    if (geometries.length === 1) {
+      merged = geometries[0];
+    } else {
+      const result = mergeGeometries(geometries, false);
+      if (!result) continue;
+      merged = result;
+    }
+
     const exportMat = new THREE.MeshStandardMaterial({
-      color: srcColor,
-      metalness: srcMetalness,
-      roughness: srcRoughness,
+      color,
+      metalness,
+      roughness,
       side: THREE.DoubleSide,
     });
 
-    group.add(new THREE.Mesh(geometry, exportMat));
+    group.add(new THREE.Mesh(merged, exportMat));
   }
+
   return group;
 }
 

@@ -42,6 +42,7 @@ interface InputPanelProps {
   initialText?: string;
   initialFont?: string;
   droppedFile?: { name: string; content: string } | null;
+  onUploadedFileNameChange?: (name: string | null) => void;
 }
 
 const tabs = [
@@ -64,6 +65,7 @@ export function InputPanel({
   initialText,
   initialFont,
   droppedFile,
+  onUploadedFileNameChange,
 }: InputPanelProps) {
   const [expanded, setExpanded] = useState(true);
 
@@ -82,9 +84,10 @@ export function InputPanel({
     if (droppedFile) {
       setUploadedFileName(droppedFile.name);
       setUploadedSvgContent(droppedFile.content);
+      onUploadedFileNameChange?.(droppedFile.name);
       setExpanded(true);
     }
-  }, [droppedFile]);
+  }, [droppedFile, onUploadedFileNameChange]);
 
   // Render the uploaded SVG preview as an inert image. Encoding the markup as a
   // data URL and rendering it via <img> means the browser treats it as a static
@@ -126,9 +129,11 @@ export function InputPanel({
       if (!text || (!text.includes('<svg') && !text.includes('<SVG'))) {
         setUploadError("Not a valid SVG file.");
         setUploadedFileName(file.name);
+        onUploadedFileNameChange?.(file.name);
         return;
       }
       setUploadedFileName(file.name);
+      onUploadedFileNameChange?.(file.name);
       setUploadedSvgContent(text);
       onFileSvgChange(text);
     };
@@ -139,6 +144,7 @@ export function InputPanel({
     setUploadedFileName(null);
     setUploadedSvgContent(null);
     setUploadError(null);
+    onUploadedFileNameChange?.(null);
     onFileSvgChange("");
     if (svgFileInputRef.current) svgFileInputRef.current.value = "";
   };

@@ -84,6 +84,7 @@ export default function Home() {
   const [embedOpen, setEmbedOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 
   // --- Export bar ---
   const [exportOpen] = useState(true);
@@ -103,9 +104,16 @@ export default function Home() {
   }, []);
 
   const handle3DExport = useCallback((format: Export3DFormat) => {
-    const base = inputTab === "text" && currentText ? currentText.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "3dsvg" : "3dsvg";
+    let base: string;
+    if (inputTab === "text" && currentText) {
+      base = currentText.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "3dsvg";
+    } else if (inputTab === "file" && uploadedFileName) {
+      base = uploadedFileName.replace(/\.[^.]+$/, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "3dsvg";
+    } else {
+      base = "3dsvg";
+    }
     export3DFnRef.current?.(format, base);
-  }, [inputTab, currentText]);
+  }, [inputTab, currentText, uploadedFileName]);
 
   // --- Drag-and-drop SVG + raster ---
   const [isDragging, setIsDragging] = useState(false);
@@ -268,6 +276,7 @@ export default function Home() {
             initialText={currentText}
             initialFont={currentFont}
             droppedFile={droppedFile}
+            onUploadedFileNameChange={setUploadedFileName}
           />
         </motion.div>
 
