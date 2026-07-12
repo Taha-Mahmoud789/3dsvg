@@ -301,9 +301,9 @@ export function ControlsPanel({
   };
 
   return (
-    <div className="w-72 max-md:w-full rounded-xl bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-full flex flex-col overflow-hidden">
+    <div className="w-72 max-md:w-full rounded-xl bg-card/70 backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_oklch(0_0_0/0.5),0_0_20px_oklch(0.78_0.15_195/0.06)] h-full flex flex-col overflow-hidden">
       {/* Header -- fixed at top */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] shrink-0">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Settings</span>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
           <X className="h-4 w-4" />

@@ -77,18 +77,18 @@ function ShutterButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className="relative h-16 w-16 rounded-full flex items-center justify-center shrink-0 cursor-pointer disabled:opacity-40"
+      className="relative h-16 w-16 rounded-full flex items-center justify-center shrink-0 cursor-pointer disabled:opacity-40 group"
     >
       {/* Outer ring */}
       <div
-        className={`absolute inset-0 rounded-full border-[3px] transition-colors duration-300 ${
-          isVideo ? "border-red-500" : "border-white"
+        className={`absolute inset-0 rounded-full border-[3px] transition-all duration-300 ${
+          isVideo ? "border-red-500 shadow-[0_0_16px_oklch(0.6_0.22_25/0.3)]" : "border-primary shadow-[0_0_16px_oklch(0.78_0.15_195/0.3)]"
         }`}
       />
       {/* Inner fill */}
       <div
         className={`h-12 w-12 rounded-full transition-all duration-300 active:scale-90 ${
-          isVideo ? "bg-red-500" : "bg-white"
+          isVideo ? "bg-red-500" : "bg-primary"
         }`}
       />
     </button>
@@ -413,7 +413,7 @@ export function ExportModal({
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 20 }}
-          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-full bg-black/70 backdrop-blur-2xl border border-white/[0.1] shadow-[0_8px_32px_oklch(0_0_0/0.5)] px-5 py-2.5"
+          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-full bg-black/70 backdrop-blur-2xl border border-white/[0.08] shadow-[0_8px_32px_oklch(0_0_0/0.5),0_0_20px_oklch(0.78_0.15_195/0.08)] px-5 py-2.5"
         >
           <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
           <span className="text-sm font-mono text-white tabular-nums">
@@ -664,7 +664,7 @@ export function ExportModal({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 10 }}
                   transition={{ duration: 0.2, ease: "easeInOut" }}
-                  className="flex gap-1 rounded-full bg-black/40 backdrop-blur-xl border border-white/[0.12] p-1"
+                  className="flex gap-1 rounded-full bg-black/50 backdrop-blur-xl border border-white/[0.1] p-1 shadow-[0_4px_16px_oklch(0_0_0/0.2)]"
                 >
                   {[1, 2, 3].map((n) => (
                     <Tooltip key={n}>
@@ -672,7 +672,7 @@ export function ExportModal({
                         <button
                           className={`flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[11px] font-medium transition-all cursor-pointer ${
                             videoCycles === n
-                              ? "bg-black/30 text-white shadow-sm"
+                              ? "bg-primary/20 text-primary shadow-[0_0_12px_oklch(0.78_0.15_195/0.15)]"
                               : "text-white/50 hover:text-white/80"
                           }`}
                           onClick={() => setVideoCycles(videoCycles === n ? null : n)}
@@ -705,11 +705,11 @@ export function ExportModal({
             </div>
 
             {/* Mode toggle + settings */}
-            <div className="flex items-center gap-1 rounded-full bg-black/40 backdrop-blur-xl border border-white/[0.12] p-1">
+            <div className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur-xl border border-white/[0.1] p-1 shadow-[0_4px_24px_oklch(0_0_0/0.3)]">
               <button
                 className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-medium transition-all cursor-pointer ${
                   tab === "image"
-                    ? "bg-black/30 text-white shadow-sm"
+                    ? "bg-primary/20 text-primary shadow-[0_0_12px_oklch(0.78_0.15_195/0.15)]"
                     : "text-white/50 hover:text-white/80"
                 }`}
                 onClick={() => setTab("image")}
@@ -719,7 +719,7 @@ export function ExportModal({
               <button
                 className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-medium transition-all cursor-pointer ${
                   tab === "video"
-                    ? "bg-black/30 text-white shadow-sm"
+                    ? "bg-primary/20 text-primary shadow-[0_0_12px_oklch(0.78_0.15_195/0.15)]"
                     : "text-white/50 hover:text-white/80"
                 }`}
                 onClick={() => setTab("video")}
@@ -750,7 +750,7 @@ export function ExportModal({
                         exit={{ opacity: 0, width: 0, transition: { duration: 0.5, ease: "easeInOut", opacity: { duration: 0.15 }, width: { delay: 0.12, duration: 0.4 } } }}
                         className={`rounded-full px-2.5 py-1 text-[11px] font-medium whitespace-nowrap cursor-pointer overflow-hidden transition-colors ${
                           isActive && aspectExpanded
-                            ? "bg-black/30 text-white shadow-sm"
+                            ? "bg-primary/20 text-primary shadow-[0_0_12px_oklch(0.78_0.15_195/0.15)]"
                             : isActive && !aspectExpanded
                               ? "text-white/60"
                               : "text-white/40 hover:text-white/70"

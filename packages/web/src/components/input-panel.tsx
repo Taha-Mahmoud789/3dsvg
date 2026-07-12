@@ -152,7 +152,7 @@ export function InputPanel({
   return (
     <div ref={panelRef} className="flex items-start gap-2 pointer-events-none">
       {/* Vertical toolbar */}
-      <div className="flex flex-col gap-1 rounded-xl bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] p-1.5 pointer-events-auto">
+      <div className="flex flex-col gap-1 rounded-xl bg-card/70 backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_oklch(0_0_0/0.5),0_0_20px_oklch(0.78_0.15_195/0.06)] p-1.5 pointer-events-auto">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isSelected = inputTab === tab.value;
@@ -185,7 +185,7 @@ export function InputPanel({
       <motion.div
         animate={expanded ? { opacity: 1, x: 0, pointerEvents: "auto" as const } : { opacity: 0, x: -8, pointerEvents: "none" as const }}
         transition={{ duration: 0.15 }}
-        className="w-80 rounded-xl bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] p-3"
+        className="w-80 rounded-xl bg-card/70 backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_oklch(0_0_0/0.5),0_0_20px_oklch(0.78_0.15_195/0.06)] p-3"
       >
             <div className={inputTab === "draw" ? "" : "hidden"}>
               <PixelEditor onSvgChange={onPixelSvgChange} />

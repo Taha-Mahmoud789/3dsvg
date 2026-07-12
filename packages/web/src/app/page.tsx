@@ -242,14 +242,21 @@ export default function Home() {
         className="pointer-events-none absolute inset-0 z-[1]"
         style={{
           background:
-            "radial-gradient(ellipse at center, oklch(0.13 0.01 275 / 0.15) 0%, transparent 70%)",
+            "radial-gradient(ellipse 80% 60% at 30% 40%, oklch(0.78 0.15 195 / 0.07) 0%, transparent 70%)",
         }}
       />
       <div
         className="pointer-events-none absolute inset-0 z-[1]"
         style={{
           background:
-            "radial-gradient(ellipse at center, transparent 50%, oklch(0 0 0 / 0.3) 100%)",
+            "radial-gradient(ellipse 60% 80% at 70% 60%, oklch(0.65 0.12 220 / 0.05) 0%, transparent 70%)",
+        }}
+      />
+      <div
+        className="pointer-events-none absolute inset-0 z-[1]"
+        style={{
+          background:
+            "radial-gradient(ellipse at center, transparent 40%, oklch(0 0 0 / 0.4) 100%)",
         }}
       />
 
@@ -289,7 +296,7 @@ export default function Home() {
               variant="ghost"
               size="icon"
               onClick={() => setFeedbackOpen(true)}
-              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-10 w-10"
+              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.08] shadow-[0_4px_16px_oklch(0_0_0/0.3)] h-10 w-10 hover:border-primary/30 hover:shadow-[0_0_16px_oklch(0.78_0.15_195/0.1)]"
             >
               <MessageCircle className="h-4 w-4" />
             </Button>
@@ -302,7 +309,7 @@ export default function Home() {
               variant="ghost"
               size="icon"
               onClick={() => setDownloadOpen(true)}
-              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-10 w-10"
+              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.08] shadow-[0_4px_16px_oklch(0_0_0/0.3)] h-10 w-10 hover:border-primary/30 hover:shadow-[0_0_16px_oklch(0.78_0.15_195/0.1)]"
             >
               <Download className="h-4 w-4" />
             </Button>
@@ -315,7 +322,7 @@ export default function Home() {
               variant="ghost"
               size="icon"
               onClick={() => setEmbedOpen(true)}
-              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-10 w-10"
+              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.08] shadow-[0_4px_16px_oklch(0_0_0/0.3)] h-10 w-10 hover:border-primary/30 hover:shadow-[0_0_16px_oklch(0.78_0.15_195/0.1)]"
             >
               <CodeXml className="h-4 w-4" />
             </Button>
@@ -328,8 +335,8 @@ export default function Home() {
               variant="ghost"
               size="icon"
               onClick={() => { setControlsOpen((v) => !v); setTopPanel("settings"); }}
-              className={`rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-10 w-10 ${
-                controlsOpen ? "text-primary" : ""
+              className={`rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.08] shadow-[0_4px_16px_oklch(0_0_0/0.3)] h-10 w-10 hover:border-primary/30 hover:shadow-[0_0_16px_oklch(0.78_0.15_195/0.1)] ${
+                controlsOpen ? "text-primary border-primary/30 shadow-[0_0_16px_oklch(0.78_0.15_195/0.15)]" : ""
               }`}
             >
               <Settings2 className="h-4 w-4" />
