@@ -17,7 +17,8 @@ import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { ContactShadows, Environment, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { optimizeGlb } from "@/lib/optimize-glb";
 
 import { PngTo3D } from "3dsvg";
 import type { PngTo3DProps } from "3dsvg";
@@ -48,6 +49,19 @@ function collectExportableMeshes(scene: THREE.Scene): THREE.Mesh[] {
     meshes.push(obj);
   });
   return meshes;
+}
+
+function optimizeGeometry(geo: THREE.BufferGeometry): THREE.BufferGeometry {
+  let optimized = mergeVertices(geo, 1e-4);
+  const pos = optimized.attributes.position;
+  if (pos) {
+    const arr = pos.array as Float32Array;
+    for (let i = 0; i < arr.length; i++) {
+      arr[i] = Math.round(arr[i] * 10000) / 10000;
+    }
+    pos.needsUpdate = true;
+  }
+  return optimized;
 }
 
 function buildExportGroup(scene: THREE.Scene): THREE.Group {
@@ -81,6 +95,7 @@ function buildExportGroup(scene: THREE.Scene): THREE.Group {
       if (!result) continue;
       merged = result;
     }
+    merged = optimizeGeometry(merged);
     group.add(new THREE.Mesh(merged, material));
   }
 
@@ -108,12 +123,16 @@ function PngExportCapture({
 
       new GLTFExporter().parse(
         group,
-        (result) => {
-          const blob =
-            result instanceof ArrayBuffer
-              ? new Blob([result], { type: "model/gltf-binary" })
-              : new Blob([JSON.stringify(result)], { type: "model/gltf+json" });
-          triggerDownload(blob, `${filename}.glb`);
+        async (result) => {
+          const raw = result instanceof ArrayBuffer
+            ? result
+            : new TextEncoder().encode(JSON.stringify(result)).buffer;
+          try {
+            const optimized = await optimizeGlb(raw);
+            triggerDownload(new Blob([optimized], { type: "model/gltf-binary" }), `${filename}.glb`);
+          } catch {
+            triggerDownload(new Blob([raw], { type: "model/gltf-binary" }), `${filename}.glb`);
+          }
         },
         (err) => console.error("GLB export failed", err),
         { binary: true },

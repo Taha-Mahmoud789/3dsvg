@@ -16,7 +16,8 @@ import * as THREE from "three";
 import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { PLYExporter } from "three/examples/jsm/exporters/PLYExporter.js";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { optimizeGlb } from "@/lib/optimize-glb";
 
 import { SVG3D, materialPresets } from "3dsvg";
 import type { AnimationType, MaterialSettings } from "3dsvg";
@@ -309,6 +310,22 @@ function collectExtrudedMeshes(scene: THREE.Scene): THREE.Mesh[] {
   return meshes;
 }
 
+// Reduce vertex count and shrink buffer sizes for smaller GLB files.
+function optimizeGeometry(geo: THREE.BufferGeometry): THREE.BufferGeometry {
+  // 1. Merge duplicate vertices (ExtrudeGeometry creates many at seams)
+  let optimized = mergeVertices(geo, 1e-4);
+  // 2. Quantize positions to 4 decimal places (sub-mm precision, plenty for SVG)
+  const pos = optimized.attributes.position;
+  if (pos) {
+    const arr = pos.array as Float32Array;
+    for (let i = 0; i < arr.length; i++) {
+      arr[i] = Math.round(arr[i] * 10000) / 10000;
+    }
+    pos.needsUpdate = true;
+  }
+  return optimized;
+}
+
 // Build a detached group containing cloned meshes with world transforms baked
 // into the geometry. Ensures exports look like what the user sees, regardless
 // of camera/animation state.
@@ -370,6 +387,9 @@ function buildExportGroup(scene: THREE.Scene): THREE.Group {
       merged = result;
     }
 
+    // Deduplicate vertices and quantize positions to shrink GLB
+    merged = optimizeGeometry(merged);
+
     const exportMat = new THREE.MeshStandardMaterial({
       color,
       metalness,
@@ -411,11 +431,16 @@ function Download3DCapture({
       } else if (format === "glb") {
         new GLTFExporter().parse(
           group,
-          (result) => {
-            const blob = result instanceof ArrayBuffer
-              ? new Blob([result], { type: "model/gltf-binary" })
-              : new Blob([JSON.stringify(result)], { type: "model/gltf+json" });
-            triggerDownload(blob, `${filename}.glb`);
+          async (result) => {
+            const raw = result instanceof ArrayBuffer
+              ? result
+              : new TextEncoder().encode(JSON.stringify(result)).buffer;
+            try {
+              const optimized = await optimizeGlb(raw);
+              triggerDownload(new Blob([optimized], { type: "model/gltf-binary" }), `${filename}.glb`);
+            } catch {
+              triggerDownload(new Blob([raw], { type: "model/gltf-binary" }), `${filename}.glb`);
+            }
           },
           (err) => console.error("GLTF export failed", err),
           { binary: true }

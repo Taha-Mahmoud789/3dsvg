@@ -24,6 +24,10 @@ const FONTS = [
   { name: "Pacifico", url: "https://fonts.gstatic.com/s/pacifico/v23/FwZY7-Qmy14u9lezJ96A.ttf" },
   { name: "Oswald", url: "https://fonts.gstatic.com/s/oswald/v57/TK3_WkUHHAIjg75cFRf3bXL8LICs1xZogUE.ttf" },
   { name: "Archivo Black", url: "https://fonts.gstatic.com/s/archivoblack/v23/HTxqL289NzCGg4MzN6KJ7eW6OYs.ttf" },
+  { name: "Cairo", url: "https://fonts.gstatic.com/s/cairo/v31/SLXgc1nY6HkvangtZmpQdkhzfH5lkSs2SgRjCAGMQ1z0hAc5W1Q.ttf" },
+  { name: "Tajawal", url: "https://fonts.gstatic.com/s/tajawal/v12/Iurf6YBj_oCad4k1l4qkLrY.ttf" },
+  { name: "Almarai", url: "https://fonts.gstatic.com/s/almarai/v19/tssoApxBaigK_hnnS-aghng.ttf" },
+  { name: "IBM Plex Sans Arabic", url: "https://fonts.gstatic.com/s/ibmplexsansarabic/v15/Qw3NZRtWPQCuHme67tEYUIx3Kh0PHR9N6YOG-dCT.ttf" },
 ];
 
 const fontCache = new Map<string, opentype.Font>();
@@ -43,9 +47,15 @@ if (typeof window !== "undefined") {
   loadFont(DEFAULT_FONT.name, DEFAULT_FONT.url);
 }
 
+function isRtl(text: string): boolean {
+  const rtlRegex = /[\u0600-\u06FF\u0750-\u077F\u0870-\u088E\u0890-\u0891\u0897-\u08E1\u08E3-\u08FF\u200C-\u200E\u2010-\u2011\u204F\u2E41\uFB50-\uFDFF\uFE70-\uFE74\uFE76-\uFEFC]/;
+  return rtlRegex.test(text);
+}
+
 function textToSvg(text: string, font: opentype.Font): string {
   const size = 200;
   const available = size - 20;
+  const rtl = isRtl(text);
 
   // Find optimal font size
   let fontSize = 180;
@@ -65,27 +75,42 @@ function textToSvg(text: string, font: opentype.Font): string {
   const offsetX = (size - w) / 2 - bb.x1;
   const offsetY = (size - h) / 2 - bb.y1;
 
-  // Generate one <path> per glyph so SVGLoader correctly identifies holes
-  // (e.g., the inside of A, O, M, W)
   const glyphs = font.stringToGlyphs(text);
-  let x = offsetX;
+  const scale = fontSize / (font.unitsPerEm || 1000);
   const paths: string[] = [];
 
-  for (let i = 0; i < glyphs.length; i++) {
-    const glyph = glyphs[i];
-    const glyphPath = glyph.getPath(x, offsetY, fontSize);
-    const d = glyphPath.toPathData(2);
-    if (d) {
-      paths.push(`<path d="${d}" fill="black" fill-rule="evenodd"/>`);
+  if (rtl) {
+    let x = offsetX + w;
+    for (let i = 0; i < glyphs.length; i++) {
+      const glyph = glyphs[i];
+      const advance = (glyph.advanceWidth || 0) * scale;
+      let kerning = 0;
+      if (i < glyphs.length - 1) {
+        kerning = font.getKerningValue(glyphs[i], glyphs[i + 1]) * scale;
+      }
+      x -= advance;
+      const glyphPath = glyph.getPath(x + kerning, offsetY, fontSize);
+      const d = glyphPath.toPathData(2);
+      if (d) {
+        paths.push(`<path d="${d}" fill="black" fill-rule="evenodd"/>`);
+      }
     }
-    // Advance x position
-    const advance = (glyph.advanceWidth || 0) * (fontSize / (font.unitsPerEm || 1000));
-    // Add kerning
-    if (i < glyphs.length - 1) {
-      const kerning = font.getKerningValue(glyphs[i], glyphs[i + 1]);
-      x += advance + kerning * (fontSize / (font.unitsPerEm || 1000));
-    } else {
-      x += advance;
+  } else {
+    let x = offsetX;
+    for (let i = 0; i < glyphs.length; i++) {
+      const glyph = glyphs[i];
+      const glyphPath = glyph.getPath(x, offsetY, fontSize);
+      const d = glyphPath.toPathData(2);
+      if (d) {
+        paths.push(`<path d="${d}" fill="black" fill-rule="evenodd"/>`);
+      }
+      const advance = (glyph.advanceWidth || 0) * scale;
+      if (i < glyphs.length - 1) {
+        const kerning = font.getKerningValue(glyphs[i], glyphs[i + 1]);
+        x += advance + kerning * scale;
+      } else {
+        x += advance;
+      }
     }
   }
 
@@ -150,6 +175,7 @@ export function TextInput({ onSvgChange, onTextChange, onFontChange, initialText
         ref={inputRef}
         placeholder="Type something..."
         value={text}
+        dir={isRtl(text) ? "rtl" : "ltr"}
         onChange={(e) => { setText(e.target.value); onTextChange?.(e.target.value); }}
         className="h-8 text-xs"
       />
