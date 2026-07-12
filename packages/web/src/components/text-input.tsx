@@ -44,7 +44,7 @@ async function loadFont(name: string, url: string): Promise<opentype.Font> {
 // Preload default font immediately so it's ready before user clicks text tab
 const DEFAULT_FONT = FONTS.find((f) => f.name === "Rubik Mono One")!;
 if (typeof window !== "undefined") {
-  loadFont(DEFAULT_FONT.name, DEFAULT_FONT.url);
+  loadFont(DEFAULT_FONT.name, DEFAULT_FONT.url).catch(() => {});
 }
 
 function isRtl(text: string): boolean {

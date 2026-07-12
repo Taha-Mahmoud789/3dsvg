@@ -149,7 +149,6 @@ function PngExportCapture({
 
 function ReadyNotifier({ onReady }: { onReady?: () => void }) {
   const readyFired = useRef(false);
-  const { gl } = useThree();
 
   useFrame(() => {
     if (!readyFired.current) {

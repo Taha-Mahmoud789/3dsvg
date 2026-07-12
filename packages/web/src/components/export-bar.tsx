@@ -281,7 +281,7 @@ export function ExportModal({
 
   const handleImageCapture = useCallback(() => {
     captureFn.current?.(
-      720,
+      resolution,
       withBg,
       (dataUrl) => {
         setCapturedImage(dataUrl);
@@ -298,7 +298,7 @@ export function ExportModal({
       link.click();
       track("Image Download", { resolution, withBackground: withBg, aspect: aspect });
     }, aspectRatioValue);
-  }, [resolution, withBg, aspect, aspectRatioValue, captureFn]);
+  }, [resolution, withBg, aspectRatioValue, captureFn]);
 
   const exportAbortRef = useRef(false);
 

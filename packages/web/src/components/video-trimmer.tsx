@@ -46,21 +46,6 @@ export function VideoTrimmer({
   const [playheadTime, setPlayheadTime] = useState(0);
   const rafRef = useRef<number>(0);
 
-  // Sync play state with actual video element
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    setIsPlaying(!v.paused);
-    v.addEventListener("play", onPlay);
-    v.addEventListener("pause", onPause);
-    return () => {
-      v.removeEventListener("play", onPlay);
-      v.removeEventListener("pause", onPause);
-    };
-  }, [videoRef]);
-
   // Measure container
   useEffect(() => {
     if (!containerRef.current) return;

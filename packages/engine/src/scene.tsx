@@ -579,8 +579,9 @@ export function useExtrudedGeometry(
     setProgress(0);
 
     (async () => {
-      // Step 1: Parse shapes with fill colors (fast, synchronous)
-      const allShapes = await parseShapesFromSVG(svgString);
+      try {
+        // Step 1: Parse shapes with fill colors (fast, synchronous)
+        const allShapes = await parseShapesFromSVG(svgString);
 
       if (allShapes.length === 0 || cancelRef.current || version !== versionRef.current) {
         setResult(EMPTY_RESULT);
@@ -704,6 +705,11 @@ export function useExtrudedGeometry(
       setProgress(100);
       setResult({ geometries: geos, colors, center: ctr, baseScale: s });
       setLoading(false);
+      } catch (err) {
+        console.error("[SVG3D] Extrusion failed:", err);
+        setResult(EMPTY_RESULT);
+        setLoading(false);
+      }
     })();
 
     return () => { cancelRef.current = true; };
@@ -742,6 +748,8 @@ export function ExtrudedSVG({
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.needsUpdate = true;
       setTexture(tex);
+    }, undefined, (err) => {
+      console.error("[SVG3D] Texture load failed:", err);
     });
   }, [textureUrl]);
 

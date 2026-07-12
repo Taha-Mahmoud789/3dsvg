@@ -100,21 +100,7 @@ const logFeedback = (data: {
   email?: string;
   metadata: Metadata;
 }) => {
-  console.group('📝 New Feedback Submitted');
-  console.log('Sentiment:', data.sentiment);
-  console.log('Message:', data.message);
-  if (data.email) console.log('Email:', data.email);
-  console.group('🌍 Context');
-  console.log('URL:', data.metadata.context.url);
-  console.log('Timestamp:', data.metadata.context.timestamp);
-  if (data.metadata.context.location) {
-    console.log('Location:', `${data.metadata.context.location.city}, ${data.metadata.context.location.country}`);
-  }
-  console.log('Browser:', data.metadata.browser.platform);
-  console.log('Language:', data.metadata.browser.language);
-  console.log('Viewport:', `${data.metadata.browser.viewport.width}x${data.metadata.browser.viewport.height}`);
-  console.groupEnd();
-  console.groupEnd();
+  // Feedback logged (no-op in production)
 };
 
 // -----------------------------
