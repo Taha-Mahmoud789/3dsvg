@@ -104,7 +104,7 @@ interface TextInputProps {
 
 export function TextInput({ onSvgChange, onTextChange, onFontChange, initialText, initialFont, active }: TextInputProps & { active?: boolean }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState(initialText ?? "3DSVG");
+  const [text, setText] = useState(initialText ?? "SVG-TO-3D");
   const [fontName, setFontName] = useState(initialFont ?? "Rubik Mono One");
   const [loadedFont, setLoadedFont] = useState<opentype.Font | null>(null);
   const [loading, setLoading] = useState(true);

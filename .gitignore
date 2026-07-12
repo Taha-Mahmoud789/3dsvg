@@ -22,6 +22,9 @@
 /qa-screenshots/
 /test-results/
 
+# playwright mcp session data
+.playwright-mcp/
+
 # misc
 .DS_Store
 *.pem

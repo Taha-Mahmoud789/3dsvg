@@ -1,6 +1,4 @@
-# 3dsvg
-
-![3dsvg](.github/assets/demo.png)
+# SVG to 3D
 
 The easiest way to turn SVGs into interactive 3D.
 
@@ -14,7 +12,7 @@ This is a monorepo with two packages:
 | Package | Description |
 |---------|-------------|
 | [`packages/engine`](packages/engine/) | Embeddable `<SVG3D>` React component — published to npm as [`3dsvg`](https://www.npmjs.com/package/3dsvg) |
-| [`packages/web`](packages/web/) | Visual editor at [3dsvg.design](https://3dsvg.design) — design 3D objects and export as images, video, 3D models, or embed code |
+| [`packages/web`](packages/web/) | Visual editor — design 3D objects and export as images, video, 3D models, or embed code |
 
 The web editor renders the engine's `<SVG3D>` component directly — what you see in the editor is exactly what you get with the embed.
 
@@ -62,7 +60,7 @@ See the full [engine docs](packages/engine/README.md) for all props.
 ## Project Structure
 
 ```
-3dsvg/
+svg-to-3d/
 ├── packages/
 │   ├── engine/                 # npm package "3dsvg"
 │   │   └── src/
@@ -95,6 +93,6 @@ See the full [engine docs](packages/engine/README.md) for all props.
 
 ## License
 
-MIT — [Renato Costa](https://renato.works)
+MIT
 
-Made in [Blueberry](https://meetblueberry.com) 🫐
+Originally created by [Renato Costa](https://renato.works) — independently maintained fork.

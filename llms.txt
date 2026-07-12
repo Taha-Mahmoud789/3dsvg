@@ -1,17 +1,16 @@
-# 3dsvg
+# SVG to 3D
 
 Monorepo containing an embeddable React 3D component and a visual web editor.
 
-Live editor: https://3dsvg.design
 npm package: https://www.npmjs.com/package/3dsvg
-GitHub: https://github.com/renatoworks/3dsvg
+GitHub: https://github.com/Taha-Mahmoud789/3dsvg
 
 ## Architecture
 
 This is an npm workspaces monorepo with two packages:
 
 - packages/engine — The `<SVG3D>` React component, published to npm as "3dsvg". Renders extruded 3D objects from SVGs or text with PBR materials, textures, animations, configurable lighting, and shadows.
-- packages/web — Next.js visual editor at 3dsvg.design. Renders the engine's `<SVG3D>` component directly — what users see in the editor is exactly what they get with the embed. Adds export (PNG up to 4K; video MP4/WebM; 3D model as GLB/STL/OBJ/PLY), draggable light controls, and a background plane.
+- packages/web — Next.js visual editor. Renders the engine's `<SVG3D>` component directly — what users see in the editor is exactly what they get with the embed. Adds export (PNG up to 4K; video MP4/WebM; 3D model as GLB/STL/OBJ/PLY), draggable light controls, and a background plane.
 
 ## Install (embed)
 
@@ -39,7 +38,6 @@ Renders a single 3D object. Provide either `text` or `svg` as content.
 - text: string — Text to render in 3D.
 - font: string — Google Font name. Default: "DM Sans". Available: "DM Sans", "Bebas Neue", "Playfair Display", "Righteous", "Black Ops One", "Permanent Marker", "Rubik Mono One", "Pacifico", "Oswald", "Archivo Black".
 - svg: string — Raw SVG markup or a URL (absolute or path). URLs are fetched automatically. Paths must have a non-none fill.
-- svgString: string — Deprecated. Same as `svg`; kept for back-compat.
 
 ### Shape props
 
@@ -121,39 +119,11 @@ When a texture is set, the base color is overridden to white so the texture rend
 - registerCanvas: (canvas: HTMLCanvasElement) => void — Callback with the WebGL canvas element.
 - children: React.ReactNode — Extra 3D elements rendered inside the scene.
 
-## Examples
-
-Minimal text:
-<SVG3D text="Hello" />
-
-Chrome spinning text:
-<SVG3D text="3D" font="Bebas Neue" animate="spin" depth={2} />
-
-Gold floating SVG with texture:
-<SVG3D
-  svg='<svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32..." fill="black"/></svg>'
-  material="gold"
-  animate="float"
-  texture="https://example.com/marble.jpg"
-  textureRepeat={2}
-/>
-
-Custom lighting:
-<SVG3D text="Lit" material="metal" lightPosition={[0, 10, 3]} lightIntensity={2} ambientIntensity={0.1} />
-
-No shadows, static:
-<SVG3D text="Clean" material="clay" shadow={false} interactive={false} intro="none" />
-
 ## Important notes
 
 - SVG paths MUST have a non-transparent fill color. Paths with fill="none" will not be detected.
 - Creates a WebGL context. Browsers limit these to ~8-16 per page — keep to 3-4 instances max.
 - Requires a browser environment (WebGL). Use dynamic imports in Next.js for SSR safety.
-
-## Tech stack
-
-- Engine: React, Three.js, React Three Fiber, drei, opentype.js, tsup
-- Web: Next.js 16, React 19, shadcn/ui, Tailwind CSS v4, FFmpeg WASM, Framer Motion
 
 ## License
 

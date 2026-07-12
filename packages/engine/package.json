@@ -2,14 +2,14 @@
   "name": "3dsvg",
   "version": "0.2.1",
   "description": "The easiest way to turn SVGs into interactive React 3D components",
-  "author": "Renato Costa <renatocesarcp@gmail.com>",
+  "author": "Taha Mahmoud",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/renatoworks/3dsvg.git",
+    "url": "git+https://github.com/Taha-Mahmoud789/3dsvg.git",
     "directory": "packages/engine"
   },
-  "homepage": "https://3dsvg.design",
+  "homepage": "https://github.com/Taha-Mahmoud789/3dsvg",
   "keywords": [
     "3d",
     "svg",

@@ -100,7 +100,7 @@ function PngExportCapture({
 
   useEffect(() => {
     if (!register3DExport) return;
-    register3DExport((format, filename = "png-3d") => {
+    register3DExport((format, filename = "svg-to-3d") => {
       if (format !== "glb") return;
 
       const group = buildExportGroup(scene);

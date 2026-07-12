@@ -293,7 +293,7 @@ export function ExportModal({
   const handleImageDownload = useCallback(() => {
     captureFn.current?.(resolution, withBg, (dataUrl) => {
       const link = document.createElement("a");
-      link.download = "3dsvg-export.png";
+      link.download = "svg-to-3d-export.png";
       link.href = dataUrl;
       link.click();
       track("Image Download", { resolution, withBackground: withBg, aspect: aspect });
@@ -322,7 +322,7 @@ export function ExportModal({
         // Fast path: no processing needed, download original
         const url = URL.createObjectURL(originalWebm);
         const link = document.createElement("a");
-        link.download = "3dsvg-video.webm";
+        link.download = "svg-to-3d-video.webm";
         link.href = url;
         link.click();
         track("Video Download", { format: "webm", resolution, quality: videoQuality, aspect });
@@ -360,7 +360,7 @@ export function ExportModal({
         const ext = videoFormat;
         const url = URL.createObjectURL(mp4Blob);
         const link = document.createElement("a");
-        link.download = `3dsvg-video.${ext}`;
+        link.download = `svg-to-3d-video.${ext}`;
         link.href = url;
         link.click();
         track("Video Download", { format: videoFormat, resolution, quality: videoQuality, aspect });

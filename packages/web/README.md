@@ -1,6 +1,6 @@
-# 3dsvg — Web Editor
+# SVG to 3D — Web Editor
 
-Visual editor for designing 3D objects from SVGs, text, and pixel art. This is the app behind [3dsvg.design](https://3dsvg.design).
+Visual editor for designing 3D objects from SVGs, text, and pixel art.
 
 ## Development
 
@@ -54,6 +54,6 @@ The web editor imports the engine as a workspace dependency (`"3dsvg": "file:../
 
 ## License
 
-MIT — [Renato Costa](https://renato.works)
+MIT
 
-This repository is an independent fork/extension of the original [3dsvg](https://github.com/renatocosta/3dsvg) project by Renato Costa. All original copyright and license terms apply.
+Originally created by [Renato Costa](https://renato.works) — independently maintained fork.

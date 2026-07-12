@@ -3,8 +3,7 @@
 Embeddable React component that turns SVGs and text into interactive 3D objects with PBR materials, textures, animations, and shadows.
 
 npm: https://www.npmjs.com/package/3dsvg
-Visual editor: https://3dsvg.design
-GitHub: https://github.com/renatoworks/3dsvg
+GitHub: https://github.com/Taha-Mahmoud789/3dsvg
 
 ## Install
 
@@ -111,31 +110,6 @@ When a texture is set, the base color is overridden to white so the texture rend
 - resetKey: number — Increment to force position reset.
 - registerCanvas: (canvas: HTMLCanvasElement) => void — Callback with the WebGL canvas element.
 - children: React.ReactNode — Extra 3D elements rendered inside the scene.
-
-## Examples
-
-Minimal text:
-<SVG3D text="Hello" />
-
-Chrome spinning text:
-<SVG3D text="3D" font="Bebas Neue" animate="spin" depth={2} />
-
-SVG from file:
-<SVG3D svg="/logo.svg" material="gold" animate="float" />
-
-Remote SVG with texture:
-<SVG3D
-  svg="https://cdn.example.com/icon.svg"
-  material="gold"
-  texture="https://example.com/marble.jpg"
-  textureRepeat={2}
-/>
-
-Custom lighting:
-<SVG3D text="Lit" material="metal" lightPosition={[0, 10, 3]} lightIntensity={2} ambientIntensity={0.1} />
-
-No shadows, static:
-<SVG3D text="Clean" material="clay" shadow={false} interactive={false} intro="none" />
 
 ## Important notes
 

@@ -22,19 +22,19 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "3dsvg — The easiest way to turn SVGs into 3D",
+  title: "SVG to 3D — Turn any SVG into interactive 3D",
   description: "Turn any SVG into interactive 3D objects. Animate and export as 4K image or video. 100% free, no account or subscription needed.",
-  metadataBase: new URL("https://3dsvg.design"),
+  metadataBase: new URL("https://github.com/Taha-Mahmoud789/3dsvg"),
   openGraph: {
-    title: "3dsvg — The easiest way to turn SVGs into 3D",
+    title: "SVG to 3D — Turn any SVG into interactive 3D",
     description: "Turn any SVG into interactive 3D objects. Animate and export as 4K image or video. 100% free, no account or subscription needed.",
-    url: "https://3dsvg.design",
-    siteName: "3dsvg",
+    url: "https://github.com/Taha-Mahmoud789/3dsvg",
+    siteName: "SVG to 3D",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "3dsvg — The easiest way to turn SVGs into 3D",
+    title: "SVG to 3D — Turn any SVG into interactive 3D",
     description: "Turn any SVG into interactive 3D objects. Animate and export as 4K image or video. 100% free, no account or subscription needed.",
   },
   keywords: ["3d", "svg", "react", "three.js", "embed", "webgl", "pixel art", "text to 3d", "svg to 3d", "free"],

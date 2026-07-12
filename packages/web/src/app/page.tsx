@@ -27,7 +27,6 @@ import { ExportModal } from "@/components/export-bar";
 import { EmbedDialog } from "@/components/embed-dialog";
 import { DownloadDialog } from "@/components/download-dialog";
 import { Freedback } from "@/components/freedback";
-import { GitHubStarBadge } from "@/components/github-star-badge";
 import {
   defaultTextureSettings,
   defaultMaterialSettings,
@@ -79,7 +78,7 @@ export default function Home() {
   const [animateSpeed, setAnimateSpeed] = useState(1);
   const [animateReverse, setAnimateReverse] = useState(false);
   const [lightSettings, setLightSettings] = useState<LightSettings>(defaultLightSettings);
-  const [currentText, setCurrentText] = useState("3DSVG");
+  const [currentText, setCurrentText] = useState("SVG-TO-3D");
   const [currentFont, setCurrentFont] = useState("Rubik Mono One");
   const [embedOpen, setEmbedOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
@@ -106,11 +105,11 @@ export default function Home() {
   const handle3DExport = useCallback((format: Export3DFormat) => {
     let base: string;
     if (inputTab === "text" && currentText) {
-      base = currentText.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "3dsvg";
+      base = currentText.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "svg-to-3d";
     } else if (inputTab === "file" && uploadedFileName) {
-      base = uploadedFileName.replace(/\.[^.]+$/, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "3dsvg";
+      base = uploadedFileName.replace(/\.[^.]+$/, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "svg-to-3d";
     } else {
-      base = "3dsvg";
+      base = "svg-to-3d";
     }
     export3DFnRef.current?.(format, base);
   }, [inputTab, currentText, uploadedFileName]);
@@ -445,8 +444,6 @@ export default function Home() {
         resetDelay={resetDelay}
         lightSettings={lightSettings}
       />
-
-      <GitHubStarBadge />
 
       {/* Export modal */}
       <ExportModal
